@@ -28,7 +28,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .ambient-one { width: 40vw; height: 40vw; background: #46734e; top: -20vw; left: 15vw; }
 .ambient-two { width: 30vw; height: 30vw; background: #a46f45; right: -12vw; bottom: -14vw; opacity: 0.16; }
 .topbar { position: relative; z-index: 4; height: 84px; display: flex; align-items: center; justify-content: space-between; padding: 0 40px; border-bottom: 1px solid var(--line); }
-.brand-lockup, .topbar-meta, .control-hint, .stage-bottom, .session-row, .button-row { display: flex; align-items: center; }
+.brand-lockup, .topbar-meta, .control-hint, .stage-bottom, .session-row, .button-row, .entry-choices, .movie-controls { display: flex; align-items: center; }
 .brand-lockup { gap: 12px; }
 .brand-mark { width: 35px; height: 35px; display: grid; place-items: center; border: 1px solid rgba(184, 244, 139, 0.6); border-radius: 50%; transform: rotate(30deg); }
 .brand-mark::before, .brand-mark::after, .brand-mark span { content: ""; display: block; position: absolute; width: 18px; height: 5px; border-radius: 100%; background: var(--mint); }
@@ -55,13 +55,25 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .frozen-frame { object-fit: cover; z-index: 2; }
 .vignette { z-index: 3; pointer-events: none; background: radial-gradient(ellipse at center, transparent 35%, rgba(3, 9, 8, 0.24) 75%, rgba(3, 8, 8, 0.77) 100%), linear-gradient(180deg, rgba(3, 9, 8, 0.38), transparent 23%, transparent 72%, rgba(3, 9, 8, 0.52)); }
 .scanline { z-index: 3; opacity: 0.08; pointer-events: none; background: repeating-linear-gradient(0deg, transparent 0, transparent 3px, rgba(221, 247, 220, 0.4) 4px); mix-blend-mode: overlay; }
-.entry-card, .loading-card, .message-card { position: absolute; z-index: 5; left: 10vw; top: 50%; transform: translateY(-50%); max-width: 470px; }
+.entry-card, .loading-card, .message-card { position: absolute; z-index: 5; left: 10vw; top: 50%; transform: translateY(-50%); max-width: 650px; }
 .entry-card h2, .loading-card h2, .message-card h2 { margin: 12px 0 14px; font-size: clamp(34px, 5vw, 66px); line-height: 0.98; letter-spacing: -0.07em; font-weight: 700; }
 .entry-card > p:not(.eyebrow), .loading-card p:not(.eyebrow), .message-card p:not(.eyebrow) { max-width: 415px; margin: 0 0 26px; color: #b8cbbd; font-size: 14px; line-height: 1.65; }
 .primary-button, .apply-button { display: inline-flex; gap: 25px; align-items: center; border: 0; border-radius: 2px; padding: 15px 17px 15px 19px; color: #112117; background: var(--mint); font-weight: 800; font-size: 12px; letter-spacing: 0.01em; transition: transform 180ms, background 180ms; }
 .primary-button:hover, .apply-button:hover { background: #d0ffae; transform: translateY(-2px); }
 .primary-button span, .apply-button span { font-size: 18px; line-height: 10px; }
 .primary-button.small, .ghost-button.small { padding: 11px 14px; font-size: 11px; }
+.entry-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; width: min(620px, 100%); }
+.experience-choice { min-height: 170px; border: 1px solid rgba(184, 244, 139, 0.35); padding: 20px; color: var(--paper); background: rgba(8, 24, 20, 0.72); text-align: left; transition: transform 180ms, border-color 180ms, background 180ms; }
+.experience-choice:hover { transform: translateY(-3px); border-color: var(--mint); background: rgba(184, 244, 139, 0.12); }
+.experience-choice strong, .experience-choice small { display: block; }
+.experience-choice strong { margin-top: 22px; font-size: 22px; line-height: 1; letter-spacing: -0.05em; }
+.experience-choice strong b { margin-left: 8px; color: var(--mint); font-size: 18px; }
+.experience-choice small { margin-top: 17px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.movie-setup-card { width: min(460px, calc(100vw - 44px)); padding: 27px; border: 1px solid rgba(184, 244, 139, 0.3); background: rgba(8, 17, 16, 0.82); box-shadow: 0 20px 70px rgba(0, 0, 0, 0.35); backdrop-filter: blur(18px); }
+.movie-setup-card h2 { font-size: 42px; }
+.movie-image-label { margin-top: 22px; }
+.movie-setup-error { margin: -8px 0 16px !important; color: var(--danger) !important; font: 10px "DM Mono", monospace !important; }
+.movie-setup-actions { justify-content: space-between; }
 .microcopy { margin-top: 17px !important; color: var(--subtle) !important; font: 10px "DM Mono", monospace !important; }
 .loading-card, .message-card { display: flex; gap: 18px; align-items: flex-start; padding: 24px; max-width: 490px; border: 1px solid rgba(184, 244, 139, 0.22); background: rgba(8, 17, 16, 0.68); backdrop-filter: blur(12px); }
 .loading-card h2, .message-card h2 { margin-top: 7px; font-size: 29px; }
@@ -75,6 +87,8 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .ghost-button, .close-button, .view-button, .secondary-button { border: 1px solid var(--line); color: var(--muted); background: rgba(10, 22, 19, 0.6); }
 .ghost-button { padding: 10px 14px; font-size: 11px; }
 .stage-bottom { position: absolute; z-index: 5; left: 40px; right: 40px; bottom: 27px; justify-content: space-between; }
+.movie-label { color: var(--mint); font: 9px "DM Mono", monospace; letter-spacing: 0.08em; }
+.movie-controls { gap: 8px; }
 .control-hint { gap: 5px; color: var(--muted); font-size: 10px; }
 .keycap { display: grid; place-items: center; width: 19px; height: 19px; border: 1px solid rgba(237, 245, 233, 0.3); border-bottom-color: rgba(237, 245, 233, 0.1); border-radius: 3px; color: var(--paper); font: 9px "DM Mono", monospace; }
 .arrow-hint { margin-left: 7px; color: var(--mint); font: 11px "DM Mono", monospace; letter-spacing: 0.08em; }
@@ -96,6 +110,13 @@ textarea:focus { border-color: rgba(184, 244, 139, 0.65); }
 .action-button { border: 1px solid rgba(184, 244, 139, 0.45); padding: 0 15px; color: var(--mint); background: rgba(184, 244, 139, 0.08); font-size: 10px; font-weight: 700; }
 .action-button:hover:not(:disabled) { color: #112117; background: var(--mint); }
 .action-footnote { margin: 8px 0 0; color: var(--subtle); font: 9px "DM Mono", monospace; }
+.voice-section { margin-top: 18px; }
+.voice-button { width: 100%; min-height: 38px; border: 1px solid rgba(184, 244, 139, 0.45); color: var(--mint); background: rgba(184, 244, 139, 0.08); font-size: 10px; font-weight: 700; }
+.voice-button:hover:not(:disabled), .voice-button.is-recording { color: #112117; background: var(--mint); }
+.voice-button.is-recording { border-color: var(--danger); background: var(--danger); animation: voice-pulse 900ms ease-in-out infinite alternate; }
+@keyframes voice-pulse { to { box-shadow: 0 0 16px rgba(255, 151, 123, 0.6); } }
+.voice-command-hint, .voice-feedback { margin: 8px 0 0; color: var(--subtle); font: 9px/1.5 "DM Mono", monospace; }
+.voice-feedback { color: var(--muted); }
 .suggestions { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 24px; }
 .suggestions button { border: 1px solid var(--line); border-radius: 20px; padding: 6px 8px; color: var(--subtle); background: transparent; font-size: 9px; }
 .suggestions button:hover { color: var(--mint); border-color: rgba(184, 244, 139, 0.45); }
@@ -112,6 +133,7 @@ textarea:focus { border-color: rgba(184, 244, 139, 0.65); }
 .session-row strong { color: var(--muted); font: 10px "DM Mono", monospace; }
 .warning-text { color: var(--orange) !important; }
 .panel-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 22px; }
+.back-button { grid-column: 1 / -1; }
 .secondary-button { padding: 11px; font-size: 10px; }
 .secondary-button:hover, .close-button:hover, .view-button:hover { border-color: rgba(184, 244, 139, 0.45); color: var(--mint); }
 .panel-footnote { margin: 20px 0 0; color: var(--subtle); font: 9px "DM Mono", monospace; }
@@ -125,6 +147,9 @@ textarea:focus { border-color: rgba(184, 244, 139, 0.65); }
   .world-stage { inset: 70px 0 0; }
   .entry-card, .loading-card, .message-card { left: 22px; right: 22px; max-width: none; }
   .entry-card h2 { font-size: 45px; }
+  .entry-choices { grid-template-columns: 1fr; }
+  .experience-choice { min-height: 126px; }
+  .experience-choice strong { margin-top: 13px; }
   .stage-bottom { left: 18px; right: 18px; bottom: 20px; }
   .control-hint { display: none; }
   .control-panel { top: 84px; right: 12px; bottom: 42px; left: 12px; width: auto; }

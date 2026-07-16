@@ -1,12 +1,13 @@
 # Living Worlds
 
-Living Worlds is a browser exploration prototype powered by Reactor's Lingbot World 2 model. The frontend connects to the model directly for low-latency video and input; FastAPI only exchanges the private Reactor API key for a short-lived browser token.
+Living Worlds lets you either play an interactive Lingbot World 2 session or watch a passive real-time Helios movie. The frontend connects to the selected Reactor model directly; FastAPI only exchanges the private Reactor API key for a short-lived browser token.
 
 ## Prerequisites
 
 - Python 3.11+
 - Node.js 20+
-- A Reactor API key with access to `lingbot-world-2`
+- A Reactor API key with access to `lingbot-world-2` and `helios`
+- A Deepgram API key for English speech-to-text
 
 ## Run locally
 
@@ -14,7 +15,7 @@ Configure the backend once:
 
 ```bash
 cp backend/.env.example backend/.env
-# Put your Reactor key in backend/.env
+# Put your Reactor and Deepgram keys in backend/.env
 ```
 
 Then start both services with one command from any directory:
@@ -32,11 +33,30 @@ The optional client-side demo budget can be configured in `frontend/.env`:
 
 ```bash
 VITE_MAX_SESSION_SECONDS=600
+VITE_MAX_WATCH_SECONDS=120
 ```
 
 The launcher can also be invoked with an absolute path, for example `/home/aidarinho/Real Time Game/start.sh`, while your current directory is `backend/`.
 
-The development server proxies `/api` to FastAPI. The browser never receives `REACTOR_API_KEY`.
+The development server proxies `/api` to FastAPI. The browser never receives either API key.
+
+## Play or Watch
+
+The launch screen has two choices:
+
+- **Play** opens the interactive Lingbot World 2 experience with keyboard and voice controls. Its default budget is 10 minutes.
+- **Watch real-time movie** opens a movie-only prompt and optional reference-image setup, then starts a passive Helios stream. It has Pause, Restart, and Back controls, with a default two-minute budget.
+
+Helios is billed separately by Reactor, so keep the Watch limit short unless you intentionally raise `VITE_MAX_WATCH_SECONDS`.
+
+## Voice control
+
+Hold **Hold to talk** while speaking, then release it to send an English command. The browser asks for microphone permission on first use; recordings are sent to Deepgram for transcription and are not saved by this app.
+
+- `Change world to snowy ruins at night` replaces the scene direction.
+- Any other phrase, such as `play football` or `Action play football`, sends a one-shot player action.
+
+See [voice controls](docs/voice-controls.md) for the full behavior and troubleshooting notes. `DEEPGRAM_API_KEY` stays on the FastAPI server and is never sent to the browser.
 
 ## Notes
 

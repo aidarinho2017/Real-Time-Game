@@ -29,6 +29,7 @@ export interface LingbotError {
 
 export interface LingbotModel {
   connect(jwt: string): Promise<void>;
+  disconnect(recoverable?: boolean): Promise<void>;
   uploadFile(file: File): Promise<unknown>;
   setImage(payload: { image: unknown }): Promise<void>;
   setPrompt(payload: { prompt: string }): Promise<void>;

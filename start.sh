@@ -50,7 +50,7 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! -x "$FRONTEND_DIR/node_modules/.bin/vite" ]]; then
+if ! (cd "$FRONTEND_DIR" && npm ls --depth=0 >/dev/null 2>&1); then
   echo "Installing frontend dependencies..."
   (cd "$FRONTEND_DIR" && npm ci)
 fi
@@ -69,4 +69,3 @@ FRONTEND_PID=$!
 
 echo "Living Worlds is running. Press Ctrl+C to stop both services."
 wait -n "$BACKEND_PID" "$FRONTEND_PID"
-

@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
+import { HeliosModel } from "@reactor-models/helios";
 import { LingbotWorld2Model } from "@reactor-models/lingbot-world-2";
+import { parseVoiceCommand } from "./voice-command";
 import {
   DEFAULT_PROMPT,
   DEFAULT_SESSION_SECONDS,
+  DEFAULT_WATCH_SECONDS,
   DEFAULT_WORLD_IMAGE,
   MAX_IMAGE_BYTES,
+  MAX_VOICE_AUDIO_BYTES,
 } from "./constants";
 import type {
   LingbotError,
@@ -22,6 +26,12 @@ const configuredSessionSeconds = Number(import.meta.env.VITE_MAX_SESSION_SECONDS
 const SESSION_SECONDS = Number.isFinite(configuredSessionSeconds) && configuredSessionSeconds > 0
   ? configuredSessionSeconds
   : DEFAULT_SESSION_SECONDS;
+const configuredWatchSeconds = Number(import.meta.env.VITE_MAX_WATCH_SECONDS);
+const WATCH_SECONDS = Number.isFinite(configuredWatchSeconds) && configuredWatchSeconds > 0
+  ? configuredWatchSeconds
+  : DEFAULT_WATCH_SECONDS;
+
+type Experience = "choose" | "play" | "watch-setup" | "watch";
 
 const statusLabels: Record<SessionStatus, string> = {
   idle: "Waiting to enter",
@@ -73,6 +83,47 @@ async function setImageAndWaitForAcceptance(model: LingbotModel, image: unknown)
   });
 }
 
+async function setMovieConditioningAndWait(
+  model: HeliosModel,
+  conditioning: Parameters<HeliosModel["setConditioning"]>[0],
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let timeoutId: number | undefined;
+    let unsubscribeReady: () => void = () => {};
+    let unsubscribeError: () => void = () => {};
+
+    const cleanup = () => {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      unsubscribeReady();
+      unsubscribeError();
+    };
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve();
+    };
+
+    unsubscribeReady = model.onConditionsReady((message) => {
+      if (message.has_image && message.has_prompt) finish();
+    });
+    unsubscribeError = model.onCommandError((message) => {
+      if (message.command === "set_conditioning") {
+        finish(new Error(message.reason || "Helios could not prepare the movie scene."));
+      }
+    });
+    timeoutId = window.setTimeout(() => {
+      finish(new Error("Helios did not prepare the movie scene in time."));
+    }, 15_000);
+
+    void model.setConditioning(conditioning).catch((caught) => {
+      finish(caught instanceof Error ? caught : new Error("Could not prepare the movie scene."));
+    });
+  });
+}
+
 async function defaultImageAsPng(): Promise<File> {
   const response = await fetch(DEFAULT_WORLD_IMAGE);
   const sourceBlob = await response.blob();
@@ -103,31 +154,52 @@ function captureVideoFrame(video: HTMLVideoElement): string | null {
   return canvas.toDataURL("image/jpeg", 0.88);
 }
 
+function imageValidationError(image: File): string | null {
+  if (!image.type.startsWith("image/")) return "Choose an image file.";
+  if (image.size > MAX_IMAGE_BYTES) return "Images must be 10 MB or smaller.";
+  return null;
+}
+
 export default function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const modelRef = useRef<LingbotModel | null>(null);
+  const movieModelRef = useRef<HeliosModel | null>(null);
   const activeImageRef = useRef<File | null>(null);
+  const movieImageRef = useRef<File | null>(null);
   const basePromptRef = useRef(DEFAULT_PROMPT);
   const seedRef = useRef(42);
   const sessionStartedAtRef = useRef<number | null>(null);
   const heldKeysRef = useRef(new Set<string>());
   const lastCompletedChunkRef = useRef<number | null>(null);
   const pendingActionRef = useRef<{ basePrompt: string; submittedChunk: number | null } | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const microphoneStreamRef = useRef<MediaStream | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
+  const voiceCaptureActiveRef = useRef(false);
+  const sessionLimitPendingRef = useRef(false);
+  const sessionExpiredRef = useRef(false);
 
   const [status, setStatus] = useState<SessionStatus>("idle");
+  const [experience, setExperience] = useState<Experience>("choose");
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
   const [draftPrompt, setDraftPrompt] = useState(DEFAULT_PROMPT);
+  const [moviePrompt, setMoviePrompt] = useState(DEFAULT_PROMPT);
+  const [movieImage, setMovieImage] = useState<File | null>(null);
+  const [movieSetupError, setMovieSetupError] = useState("");
   const [activeImageName, setActiveImageName] = useState("Dawn forest seed");
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
-  const [panelOpen, setPanelOpen] = useState(true);
+  const [panelOpen, setPanelOpen] = useState(false);
   const [error, setError] = useState("");
   const [frozenFrame, setFrozenFrame] = useState<string | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState(SESSION_SECONDS);
+  const [watchRemainingSeconds, setWatchRemainingSeconds] = useState(WATCH_SECONDS);
   const [chunk, setChunk] = useState(0);
   const [lastAction, setLastAction] = useState("still");
   const [actionDraft, setActionDraft] = useState("");
   const [isActionPending, setIsActionPending] = useState(false);
   const [hasVideo, setHasVideo] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<"idle" | "recording" | "transcribing">("idle");
+  const [voiceFeedback, setVoiceFeedback] = useState("");
 
   const setModelStatus = useCallback((nextStatus: SessionStatus) => {
     setStatus(nextStatus);
@@ -159,10 +231,12 @@ export default function App() {
     model.onCommandError(handleModelError);
     model.onGenerationStarted(() => {
       if (!sessionStartedAtRef.current) sessionStartedAtRef.current = Date.now();
+      sessionLimitPendingRef.current = false;
+      sessionExpiredRef.current = false;
       setFrozenFrame(null);
       setStatus("generating");
     });
-    model.onGenerationPaused(() => setStatus("paused"));
+    model.onGenerationPaused(() => setStatus(sessionExpiredRef.current ? "expired" : "paused"));
     model.onGenerationResumed(() => setStatus("generating"));
     model.onPromptAccepted((message) => {
       if (message.prompt && !pendingActionRef.current) {
@@ -196,6 +270,35 @@ export default function App() {
     });
   }, [handleModelError]);
 
+  const attachMovieListeners = useCallback((model: HeliosModel) => {
+    model.onMainVideo((_track, stream) => {
+      if (!videoRef.current) return;
+      videoRef.current.srcObject = stream;
+      setHasVideo(true);
+      void videoRef.current.play().catch(() => undefined);
+    });
+    model.onState((state) => {
+      setChunk(state.current_chunk);
+      if (state.running) setStatus("generating");
+      else if (state.paused) setStatus("paused");
+      else if (state.started) setStatus("ready");
+    });
+    model.onCommandError((message) => {
+      setError(message.reason || `Helios rejected ${message.command || "that command"}.`);
+      setStatus("error");
+    });
+    model.onGenerationStarted(() => {
+      sessionStartedAtRef.current = Date.now();
+      sessionLimitPendingRef.current = false;
+      sessionExpiredRef.current = false;
+      setFrozenFrame(null);
+      setStatus("generating");
+    });
+    model.onGenerationPaused(() => setStatus(sessionExpiredRef.current ? "expired" : "paused"));
+    model.onGenerationResumed(() => setStatus("generating"));
+    model.onChunkComplete((message) => setChunk(message.chunk_index));
+  }, []);
+
   const getToken = useCallback(async (): Promise<string> => {
     const response = await fetch("/api/reactor/token", { method: "POST" });
     const payload = await response.json().catch(() => ({}));
@@ -228,6 +331,27 @@ export default function App() {
     }
   }, [attachModelListeners, getToken, modelRef, prompt, setModelStatus]);
 
+  const startMovie = useCallback(async () => {
+    try {
+      setModelStatus("connecting");
+      const jwt = await getToken();
+      const model = new HeliosModel();
+      movieModelRef.current = model;
+      attachMovieListeners(model);
+      await model.connect(jwt);
+
+      const image = movieImageRef.current || await defaultImageAsPng();
+      movieImageRef.current = image;
+      const fileRef = await model.uploadFile(image);
+      await model.setSeed({ seed: seedRef.current });
+      await setMovieConditioningAndWait(model, { image: fileRef, prompt: moviePrompt.trim() });
+      await model.start();
+    } catch (caught) {
+      setStatus("error");
+      setError(caught instanceof Error ? caught.message : "Could not start the movie.");
+    }
+  }, [attachMovieListeners, getToken, moviePrompt, setModelStatus]);
+
   const restartWithImage = useCallback(async (image: File, nextPrompt = prompt) => {
     const model = modelRef.current;
     if (!model) {
@@ -254,15 +378,16 @@ export default function App() {
     }
   }, [modelRef, prompt, setModelStatus]);
 
-  const applyChanges = useCallback(async () => {
-    if (!draftPrompt.trim()) {
+  const applySceneDirection = useCallback(async (sceneDirection: string) => {
+    if (!sceneDirection.trim()) {
       setError("Give the world a short description before applying changes.");
       setStatus("error");
       return;
     }
-    const nextPrompt = draftPrompt.trim();
+    const nextPrompt = sceneDirection.trim();
     basePromptRef.current = nextPrompt;
     setPrompt(nextPrompt);
+    setDraftPrompt(nextPrompt);
     if (selectedImage) {
       await restartWithImage(selectedImage, nextPrompt);
       setSelectedImage(null);
@@ -276,11 +401,15 @@ export default function App() {
       setStatus("error");
       setError(caught instanceof Error ? caught.message : "Could not apply the prompt.");
     }
-  }, [draftPrompt, modelRef, restartWithImage, selectedImage]);
+  }, [modelRef, restartWithImage, selectedImage]);
 
-  const performAction = useCallback(async () => {
+  const applyChanges = useCallback(async () => {
+    await applySceneDirection(draftPrompt);
+  }, [applySceneDirection, draftPrompt]);
+
+  const sendPlayerAction = useCallback(async (rawAction: string) => {
     const model = modelRef.current;
-    const action = actionDraft.trim();
+    const action = rawAction.trim();
     if (!model || !action || isActionPending) return;
 
     const basePrompt = basePromptRef.current;
@@ -298,7 +427,115 @@ export default function App() {
       setStatus("error");
       setError(caught instanceof Error ? caught.message : "Could not send the player action.");
     }
-  }, [actionDraft, isActionPending]);
+  }, [isActionPending]);
+
+  const performAction = useCallback(async () => {
+    const action = actionDraft.trim();
+    if (!action) return;
+    setActionDraft("");
+    await sendPlayerAction(action);
+  }, [actionDraft, sendPlayerAction]);
+
+  const releaseMicrophone = useCallback(() => {
+    microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
+    microphoneStreamRef.current = null;
+  }, []);
+
+  const transcribeVoice = useCallback(async (recording: Blob) => {
+    if (!recording.size) {
+      setVoiceStatus("idle");
+      setVoiceFeedback("No audio was captured. Hold the button while you speak.");
+      return;
+    }
+    if (recording.size > MAX_VOICE_AUDIO_BYTES) {
+      setVoiceStatus("idle");
+      setVoiceFeedback("Voice recordings must be 10 MB or smaller.");
+      return;
+    }
+
+    setVoiceStatus("transcribing");
+    setVoiceFeedback("Transcribing…");
+    try {
+      const response = await fetch("/api/voice/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": recording.type || "audio/webm" },
+        body: recording,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || "Could not transcribe the recording.");
+      if (typeof payload.transcript !== "string") throw new Error("The transcription was invalid.");
+
+      const transcript = payload.transcript.trim();
+      const command = parseVoiceCommand(transcript);
+      if (!command) {
+        setVoiceFeedback("No speech was recognized. Try again.");
+        return;
+      }
+
+      if (command.kind === "scene") {
+        setVoiceFeedback(`Changing world to: “${command.value}”`);
+        await applySceneDirection(command.value);
+      } else {
+        setVoiceFeedback(`Action: “${command.value}”`);
+        await sendPlayerAction(command.value);
+      }
+    } catch (caught) {
+      setVoiceFeedback(caught instanceof Error ? caught.message : "Could not transcribe the recording.");
+    } finally {
+      setVoiceStatus("idle");
+    }
+  }, [applySceneDirection, sendPlayerAction]);
+
+  const startVoiceRecording = useCallback(async () => {
+    if (voiceCaptureActiveRef.current || voiceStatus !== "idle") return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setVoiceFeedback("Voice recording is not supported in this browser.");
+      return;
+    }
+
+    voiceCaptureActiveRef.current = true;
+    setVoiceFeedback("");
+    setVoiceStatus("recording");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!voiceCaptureActiveRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      microphoneStreamRef.current = stream;
+      voiceChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) voiceChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        mediaRecorderRef.current = null;
+        releaseMicrophone();
+        const recording = new Blob(voiceChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        voiceChunksRef.current = [];
+        void transcribeVoice(recording);
+      };
+      recorder.start();
+    } catch (caught) {
+      voiceCaptureActiveRef.current = false;
+      releaseMicrophone();
+      setVoiceStatus("idle");
+      setVoiceFeedback(caught instanceof Error ? caught.message : "Could not access the microphone.");
+    }
+  }, [releaseMicrophone, transcribeVoice, voiceStatus]);
+
+  const stopVoiceRecording = useCallback(() => {
+    if (!voiceCaptureActiveRef.current) return;
+    voiceCaptureActiveRef.current = false;
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+      return;
+    }
+    releaseMicrophone();
+    setVoiceStatus("idle");
+  }, [releaseMicrophone]);
 
   const handleReset = useCallback(async () => {
     const model = modelRef.current;
@@ -326,6 +563,34 @@ export default function App() {
     }
   }, [modelRef, prompt, setModelStatus, startSession]);
 
+  const restartMovie = useCallback(async () => {
+    const model = movieModelRef.current;
+    if (!model) {
+      await startMovie();
+      return;
+    }
+    try {
+      const frame = videoRef.current ? captureVideoFrame(videoRef.current) : null;
+      setFrozenFrame(frame);
+      setModelStatus("reshaping");
+      const nextSeed = Math.floor(Math.random() * 2_000_000_000);
+      seedRef.current = nextSeed;
+      const image = movieImageRef.current || await defaultImageAsPng();
+      movieImageRef.current = image;
+      await model.reset();
+      await model.setSeed({ seed: nextSeed });
+      const fileRef = await model.uploadFile(image);
+      await setMovieConditioningAndWait(model, { image: fileRef, prompt: moviePrompt.trim() });
+      sessionStartedAtRef.current = null;
+      setWatchRemainingSeconds(WATCH_SECONDS);
+      sessionExpiredRef.current = false;
+      await model.start();
+    } catch (caught) {
+      setStatus("error");
+      setError(caught instanceof Error ? caught.message : "Could not restart the movie.");
+    }
+  }, [moviePrompt, setModelStatus, startMovie]);
+
   const togglePause = useCallback(async () => {
     const model = modelRef.current;
     if (!model) return;
@@ -334,6 +599,8 @@ export default function App() {
         if (status === "expired") {
           sessionStartedAtRef.current = Date.now();
           setRemainingSeconds(SESSION_SECONDS);
+          sessionLimitPendingRef.current = false;
+          sessionExpiredRef.current = false;
         }
         await model.resume();
       } else {
@@ -344,6 +611,86 @@ export default function App() {
       setError(caught instanceof Error ? caught.message : "Could not change playback state.");
     }
   }, [modelRef, status]);
+
+  const toggleMoviePause = useCallback(async () => {
+    const model = movieModelRef.current;
+    if (!model) return;
+    try {
+      if (status === "paused" || status === "expired") {
+        if (status === "expired") {
+          sessionStartedAtRef.current = Date.now();
+          setWatchRemainingSeconds(WATCH_SECONDS);
+          sessionLimitPendingRef.current = false;
+          sessionExpiredRef.current = false;
+        }
+        await model.resume();
+      } else {
+        await model.pause();
+      }
+    } catch (caught) {
+      setStatus("error");
+      setError(caught instanceof Error ? caught.message : "Could not change movie playback.");
+    }
+  }, [status]);
+
+  const returnToChoice = useCallback(async () => {
+    const model = experience === "play" ? modelRef.current : movieModelRef.current;
+    try {
+      if (model && status === "generating") await model.pause();
+      if (model) await model.reset();
+      if (model) await model.disconnect();
+    } catch {
+      // The screen can still safely return to the chooser if the session is already closed.
+    }
+    modelRef.current = null;
+    movieModelRef.current = null;
+    pendingActionRef.current = null;
+    sessionStartedAtRef.current = null;
+    sessionLimitPendingRef.current = false;
+    sessionExpiredRef.current = false;
+    setIsActionPending(false);
+    setPanelOpen(false);
+    setExperience("choose");
+    setStatus("idle");
+    setError("");
+    setFrozenFrame(null);
+    setHasVideo(false);
+    setChunk(0);
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.srcObject = null;
+    }
+  }, [experience, status]);
+
+  const choosePlay = useCallback(() => {
+    setExperience("play");
+    setPanelOpen(true);
+    setRemainingSeconds(SESSION_SECONDS);
+    sessionStartedAtRef.current = null;
+    void startSession();
+  }, [startSession]);
+
+  const chooseWatch = useCallback(() => {
+    setExperience("watch-setup");
+    setPanelOpen(false);
+    setMovieSetupError("");
+  }, []);
+
+  const startConfiguredMovie = useCallback(() => {
+    if (!moviePrompt.trim()) {
+      setMovieSetupError("Give the movie a short direction first.");
+      return;
+    }
+    setExperience("watch");
+    setWatchRemainingSeconds(WATCH_SECONDS);
+    sessionStartedAtRef.current = null;
+    void startMovie();
+  }, [moviePrompt, startMovie]);
+
+  const cancelMovieSetup = useCallback(() => {
+    setMovieSetupError("");
+    setExperience("choose");
+  }, []);
 
   const syncControls = useCallback(() => {
     const model = modelRef.current;
@@ -369,6 +716,7 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (experience !== "play") return;
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
       const key = event.key.toLowerCase();
       if (!["w", "a", "s", "d", "arrowleft", "arrowright", "arrowup", "arrowdown"].includes(key)) return;
@@ -395,32 +743,45 @@ export default function App() {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [syncControls]);
+  }, [experience, syncControls]);
+
+  useEffect(() => () => {
+    voiceCaptureActiveRef.current = false;
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.onstop = null;
+      recorder.stop();
+    }
+    releaseMicrophone();
+  }, [releaseMicrophone]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      if (!sessionStartedAtRef.current || status === "paused" || status === "expired" || status === "idle") return;
+      if ((experience !== "play" && experience !== "watch") || !sessionStartedAtRef.current || status === "paused" || status === "expired" || status === "idle" || sessionLimitPendingRef.current) return;
       const elapsed = Math.floor((Date.now() - sessionStartedAtRef.current) / 1000);
-      const remaining = Math.max(0, SESSION_SECONDS - elapsed);
-      setRemainingSeconds(remaining);
-      if (remaining === 0 && modelRef.current) {
-        void modelRef.current.pause().catch(() => undefined);
-        setStatus("expired");
+      const limit = experience === "watch" ? WATCH_SECONDS : SESSION_SECONDS;
+      const remaining = Math.max(0, limit - elapsed);
+      if (experience === "watch") setWatchRemainingSeconds(remaining);
+      else setRemainingSeconds(remaining);
+      const model = experience === "watch" ? movieModelRef.current : modelRef.current;
+      if (remaining === 0 && model) {
+        sessionLimitPendingRef.current = true;
+        sessionExpiredRef.current = true;
+        void model.pause().catch(() => {
+          sessionLimitPendingRef.current = false;
+          sessionExpiredRef.current = false;
+        });
       }
     }, 1000);
     return () => window.clearInterval(interval);
-  }, [modelRef, status]);
+  }, [experience, status]);
 
   const handleImageChange = (event: ChangeEvent<HTMLInputElement>) => {
     const image = event.target.files?.[0];
     if (!image) return;
-    if (!image.type.startsWith("image/")) {
-      setError("Choose an image file.");
-      setStatus("error");
-      return;
-    }
-    if (image.size > MAX_IMAGE_BYTES) {
-      setError("Images must be 10 MB or smaller.");
+    const validationError = imageValidationError(image);
+    if (validationError) {
+      setError(validationError);
       setStatus("error");
       return;
     }
@@ -428,10 +789,25 @@ export default function App() {
     setError("");
   };
 
+  const handleMovieImageChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const image = event.target.files?.[0];
+    if (!image) return;
+    const validationError = imageValidationError(image);
+    if (validationError) {
+      setMovieSetupError(validationError);
+      return;
+    }
+    movieImageRef.current = image;
+    setMovieImage(image);
+    setMovieSetupError("");
+  };
+
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     void applyChanges();
   };
+
+  const canUseVoice = status === "generating" || status === "ready";
 
   return (
     <main className="app-shell">
@@ -441,7 +817,7 @@ export default function App() {
         <div className="brand-lockup">
           <div className="brand-mark"><span /></div>
           <div>
-            <p className="eyebrow">REACTOR / LINGBOT WORLD 2</p>
+            <p className="eyebrow">{experience === "watch" || experience === "watch-setup" ? "REACTOR / HELIOS" : "REACTOR / LINGBOT WORLD 2"}</p>
             <h1>Living Worlds</h1>
           </div>
         </div>
@@ -460,15 +836,51 @@ export default function App() {
         <div className="vignette" />
         <div className="scanline" />
 
-        {status === "idle" && (
+        {experience === "choose" && (
           <div className="entry-card">
-            <p className="eyebrow accent">A WORLD THAT LISTENS</p>
-            <h2>Step into the unknown.</h2>
-            <p>Explore an AI-generated forest in real time. Move through it, then change its weather, mood, and identity while you play.</p>
-            <button className="primary-button" onClick={(event) => { event.stopPropagation(); void startSession(); }}>
-              Enter the world <span>↗</span>
-            </button>
-            <p className="microcopy">Starts with a misty forest at dawn · 10 minute demo window</p>
+            <p className="eyebrow accent">CHOOSE YOUR EXPERIENCE</p>
+            <h2>Enter the unknown.</h2>
+            <p>Play inside a living world, or watch a real-time AI movie unfold from the same scene.</p>
+            <div className="entry-choices">
+              <button className="experience-choice play-choice" onClick={choosePlay}>
+                <span className="eyebrow accent">PLAY</span>
+                <strong>Step into the world <b>↗</b></strong>
+                <small>Move, explore, and direct the scene in real time.</small>
+              </button>
+              <button className="experience-choice watch-choice" onClick={chooseWatch}>
+                <span className="eyebrow accent">WATCH</span>
+                <strong>Real-time movie <b>▶</b></strong>
+                <small>Set a cinematic direction, then let Helios roll.</small>
+              </button>
+            </div>
+            <p className="microcopy">Play: 10 minute demo window · Watch: 2 minute Helios stream</p>
+          </div>
+        )}
+
+        {experience === "watch-setup" && (
+          <div className="entry-card movie-setup-card">
+            <p className="eyebrow accent">HELIOS MOVIE SETUP</p>
+            <h2>Direct the opening shot.</h2>
+            <p>Choose a prompt and optional visual anchor before the live movie begins.</p>
+            <label className="field-label" htmlFor="movie-prompt">Movie direction</label>
+            <textarea
+              id="movie-prompt"
+              value={moviePrompt}
+              onChange={(event) => { setMoviePrompt(event.target.value); setMovieSetupError(""); }}
+              placeholder="A cinematic journey through a moonlit forest…"
+              rows={5}
+            />
+            <label className="field-label movie-image-label" htmlFor="movie-image">Reference image</label>
+            <label className="upload-zone" htmlFor="movie-image">
+              <span className="upload-icon">↥</span>
+              <span><strong>{movieImage?.name || "Default movie image"}</strong><small>{movieImage ? "Ready to anchor the opening shot" : "Optional visual anchor"}</small></span>
+              <input id="movie-image" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={handleMovieImageChange} />
+            </label>
+            {movieSetupError && <p className="movie-setup-error" role="alert">{movieSetupError}</p>}
+            <div className="button-row movie-setup-actions">
+              <button className="primary-button" onClick={startConfiguredMovie} disabled={!moviePrompt.trim()}>Start real-time movie <span>▶</span></button>
+              <button className="ghost-button" onClick={cancelMovieSetup}>Back</button>
+            </div>
           </div>
         )}
 
@@ -476,9 +888,9 @@ export default function App() {
           <div className="loading-card">
             <span className="loader" />
             <div>
-              <p className="eyebrow accent">{status === "reshaping" ? "RE-ANCHORING" : "OPENING PORTAL"}</p>
-              <h2>{status === "reshaping" ? "Letting the world remember…" : "Finding a place to begin…"}</h2>
-              <p>{status === "reshaping" ? "Your last view is held while the new identity takes root." : "The first frames will arrive as soon as they are ready."}</p>
+              <p className="eyebrow accent">{status === "reshaping" ? "RESTARTING" : "OPENING PORTAL"}</p>
+              <h2>{status === "reshaping" ? "Letting the next scene begin…" : experience === "watch" ? "Rolling the first frames…" : "Finding a place to begin…"}</h2>
+              <p>{status === "reshaping" ? "Your last view is held while a new beginning takes shape." : "The first frames will arrive as soon as they are ready."}</p>
             </div>
           </div>
         )}
@@ -487,12 +899,12 @@ export default function App() {
           <div className="message-card error-card">
             <span className="message-icon">!</span>
             <div>
-              <p className="eyebrow danger">WORLD MODEL ERROR</p>
+              <p className="eyebrow danger">{experience === "watch" ? "MOVIE MODEL ERROR" : "WORLD MODEL ERROR"}</p>
               <h2>We lost the thread.</h2>
               <p>{error}</p>
               <div className="button-row">
-                <button className="primary-button small" onClick={() => void (modelRef.current ? handleReset() : startSession())}>Retry</button>
-                <button className="ghost-button small" onClick={() => { setError(""); setStatus(modelRef.current ? "ready" : "idle"); }}>Dismiss</button>
+                <button className="primary-button small" onClick={() => void (experience === "watch" ? (movieModelRef.current ? restartMovie() : startMovie()) : (modelRef.current ? handleReset() : startSession()))}>Retry</button>
+                <button className="ghost-button small" onClick={() => { setError(""); setStatus(experience === "watch" ? (movieModelRef.current ? "ready" : "idle") : (modelRef.current ? "ready" : "idle")); }}>Dismiss</button>
               </div>
             </div>
           </div>
@@ -502,18 +914,19 @@ export default function App() {
           <div className="message-card">
             <span className="message-icon">◷</span>
             <div>
-              <p className="eyebrow accent">DEMO WINDOW COMPLETE</p>
-              <h2>Keep the memory?</h2>
-              <p>The world is paused to protect your Reactor session budget. Resume to continue or reset to make a new beginning.</p>
+              <p className="eyebrow accent">{experience === "watch" ? "MOVIE WINDOW COMPLETE" : "DEMO WINDOW COMPLETE"}</p>
+              <h2>{experience === "watch" ? "Hold this frame?" : "Keep the memory?"}</h2>
+              <p>{experience === "watch" ? "The movie is paused after two minutes to protect your Helios budget." : "The world is paused to protect your Reactor session budget. Resume to continue or reset to make a new beginning."}</p>
               <div className="button-row">
-                <button className="primary-button small" onClick={() => void togglePause()}>Resume</button>
-                <button className="ghost-button small" onClick={() => void handleReset()}>Reset world</button>
+                <button className="primary-button small" onClick={() => void (experience === "watch" ? toggleMoviePause() : togglePause())}>Resume</button>
+                <button className="ghost-button small" onClick={() => void (experience === "watch" ? restartMovie() : handleReset())}>{experience === "watch" ? "Restart movie" : "Reset world"}</button>
+                {experience === "watch" && <button className="ghost-button small" onClick={() => void returnToChoice()}>Back</button>}
               </div>
             </div>
           </div>
         )}
 
-        {status !== "idle" && status !== "connecting" && status !== "error" && status !== "expired" && (
+        {experience === "play" && status !== "idle" && status !== "connecting" && status !== "error" && status !== "expired" && (
           <div className="stage-bottom">
             <div className="control-hint"><span className="keycap">W</span><span className="keycap">A</span><span className="keycap">S</span><span className="keycap">D</span><span>move</span><span className="arrow-hint">← ↑ ↓ →</span><span>look</span></div>
             <button className="view-button" onClick={() => setPanelOpen((open) => !open)}>
@@ -521,9 +934,20 @@ export default function App() {
             </button>
           </div>
         )}
+
+        {experience === "watch" && status !== "idle" && status !== "connecting" && status !== "error" && status !== "expired" && (
+          <div className="stage-bottom movie-stage-controls">
+            <span className="movie-label">PASSIVE REAL-TIME MOVIE · {formatTime(watchRemainingSeconds)}</span>
+            <div className="movie-controls">
+              <button className="view-button" onClick={() => void toggleMoviePause()}>{status === "paused" ? "Resume" : "Pause"}</button>
+              <button className="view-button" onClick={() => void restartMovie()}>Restart</button>
+              <button className="view-button" onClick={() => void returnToChoice()}>Back</button>
+            </div>
+          </div>
+        )}
       </section>
 
-      <aside className={`control-panel ${panelOpen ? "is-open" : ""}`}>
+      {experience === "play" && <aside className={`control-panel ${panelOpen ? "is-open" : ""}`}>
         <div className="panel-header">
           <div>
             <p className="eyebrow accent">WORLD EDITOR</p>
@@ -570,6 +994,37 @@ export default function App() {
             </button>
           </form>
           <p className="action-footnote">A one-shot event for the next beat.</p>
+          <div className="voice-section">
+            <button
+              className={`voice-button ${voiceStatus === "recording" ? "is-recording" : ""}`}
+              type="button"
+              disabled={!canUseVoice || isActionPending || voiceStatus === "transcribing"}
+              aria-pressed={voiceStatus === "recording"}
+              onPointerDown={(event) => {
+                event.currentTarget.setPointerCapture(event.pointerId);
+                void startVoiceRecording();
+              }}
+              onPointerUp={stopVoiceRecording}
+              onPointerCancel={stopVoiceRecording}
+              onLostPointerCapture={stopVoiceRecording}
+              onKeyDown={(event) => {
+                if (!event.repeat && (event.key === " " || event.key === "Enter")) {
+                  event.preventDefault();
+                  void startVoiceRecording();
+                }
+              }}
+              onKeyUp={(event) => {
+                if (event.key === " " || event.key === "Enter") {
+                  event.preventDefault();
+                  stopVoiceRecording();
+                }
+              }}
+            >
+              {voiceStatus === "recording" ? "Release to send" : voiceStatus === "transcribing" ? "Transcribing…" : "Hold to talk"}
+            </button>
+            <p className="voice-command-hint">Say an action, or “Change world to …” for a new scene.</p>
+            {voiceFeedback && <p className="voice-feedback" role="status">{voiceFeedback}</p>}
+          </div>
         </div>
         <div className="panel-divider" />
         <div className="session-row"><span>Session time</span><strong className={remainingSeconds < 60 ? "warning-text" : ""}>{formatTime(remainingSeconds)}</strong></div>
@@ -577,9 +1032,10 @@ export default function App() {
         <div className="panel-actions">
           <button className="secondary-button" disabled={!modelRef.current || status === "reshaping"} onClick={() => void togglePause()}>{status === "paused" ? "Resume" : "Pause"}</button>
           <button className="secondary-button" disabled={status === "connecting" || status === "reshaping"} onClick={() => void handleReset()}>New world</button>
+          <button className="secondary-button back-button" onClick={() => void returnToChoice()}>Back to choice</button>
         </div>
         <p className="panel-footnote">{lastAction === "still" ? "The camera is at rest." : `Current movement: ${lastAction.replaceAll("+", " · ")}`}</p>
-      </aside>
+      </aside>}
       <footer className="footer-note">A real-time world model experiment <span>·</span> No saved sessions</footer>
     </main>
   );
