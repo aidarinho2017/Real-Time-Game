@@ -2,14 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { HeliosModel } from "@reactor-models/helios";
 import { LingbotWorld2Model } from "@reactor-models/lingbot-world-2";
+import { buildSharedSceneUrl, parseSharedScene } from "./share-scene";
 import { parseVoiceCommand } from "./voice-command";
 import {
   DEFAULT_PROMPT,
   DEFAULT_SESSION_SECONDS,
   DEFAULT_WATCH_SECONDS,
   DEFAULT_WORLD_IMAGE,
+  HELIOS_DOLLARS_PER_HOUR,
   MAX_IMAGE_BYTES,
   MAX_VOICE_AUDIO_BYTES,
+  PROMPT_PRESETS,
 } from "./constants";
 import type {
   LingbotError,
@@ -32,6 +35,8 @@ const WATCH_SECONDS = Number.isFinite(configuredWatchSeconds) && configuredWatch
   : DEFAULT_WATCH_SECONDS;
 
 type Experience = "choose" | "play" | "watch-setup" | "watch";
+type PromptPreset = (typeof PROMPT_PRESETS)[number];
+type InitialWorld = Pick<PromptPreset, "playPrompt" | "image" | "name">;
 
 const statusLabels: Record<SessionStatus, string> = {
   idle: "Waiting to enter",
@@ -125,18 +130,14 @@ async function setMovieConditioningAndWait(
 }
 
 async function defaultImageAsPng(): Promise<File> {
-  const response = await fetch(DEFAULT_WORLD_IMAGE);
-  const sourceBlob = await response.blob();
-  const bitmap = await createImageBitmap(sourceBlob);
-  const canvas = document.createElement("canvas");
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  canvas.getContext("2d")!.drawImage(bitmap, 0, 0);
-  bitmap.close();
-  const png = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Could not prepare the default image"))), "image/png");
-  });
-  return new File([png], "default-fantasy-forest.png", { type: "image/png" });
+  return imageFileFromUrl(DEFAULT_WORLD_IMAGE, "default-fantasy-forest.png");
+}
+
+async function imageFileFromUrl(url: string, name: string): Promise<File> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("Could not prepare the reference image.");
+  const image = await response.blob();
+  return new File([image], name, { type: image.type || "image/png" });
 }
 
 function formatTime(seconds: number): string {
@@ -154,6 +155,22 @@ function captureVideoFrame(video: HTMLVideoElement): string | null {
   return canvas.toDataURL("image/jpeg", 0.88);
 }
 
+function downloadVideoFrame(video: HTMLVideoElement, experience: "play" | "watch"): boolean {
+  const frame = captureVideoFrame(video);
+  if (!frame) return false;
+  const link = document.createElement("a");
+  link.href = frame;
+  link.download = `living-world-${experience}-${new Date().toISOString().replace(/[:.]/g, "-")}.jpg`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  return true;
+}
+
+function formatDollars(amount: number): string {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
+}
+
 function imageValidationError(image: File): string | null {
   if (!image.type.startsWith("image/")) return "Choose an image file.";
   if (image.size > MAX_IMAGE_BYTES) return "Images must be 10 MB or smaller.";
@@ -161,12 +178,17 @@ function imageValidationError(image: File): string | null {
 }
 
 export default function App() {
+  const sharedScene = parseSharedScene(window.location.search);
+  const initialPlayPrompt = sharedScene?.mode === "play" ? sharedScene.prompt : DEFAULT_PROMPT;
+  const initialMoviePrompt = sharedScene?.mode === "watch" ? sharedScene.prompt : DEFAULT_PROMPT;
+  const sharedPlayLaunchRef = useRef(sharedScene?.mode === "play");
+  const appShellRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const modelRef = useRef<LingbotModel | null>(null);
   const movieModelRef = useRef<HeliosModel | null>(null);
   const activeImageRef = useRef<File | null>(null);
   const movieImageRef = useRef<File | null>(null);
-  const basePromptRef = useRef(DEFAULT_PROMPT);
+  const basePromptRef = useRef(initialPlayPrompt);
   const seedRef = useRef(42);
   const sessionStartedAtRef = useRef<number | null>(null);
   const heldKeysRef = useRef(new Set<string>());
@@ -178,12 +200,13 @@ export default function App() {
   const voiceCaptureActiveRef = useRef(false);
   const sessionLimitPendingRef = useRef(false);
   const sessionExpiredRef = useRef(false);
+  const stageFeedbackTimerRef = useRef<number | undefined>(undefined);
 
   const [status, setStatus] = useState<SessionStatus>("idle");
-  const [experience, setExperience] = useState<Experience>("choose");
-  const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
-  const [draftPrompt, setDraftPrompt] = useState(DEFAULT_PROMPT);
-  const [moviePrompt, setMoviePrompt] = useState(DEFAULT_PROMPT);
+  const [experience, setExperience] = useState<Experience>(sharedScene?.mode === "watch" ? "watch-setup" : "choose");
+  const [prompt, setPrompt] = useState(initialPlayPrompt);
+  const [draftPrompt, setDraftPrompt] = useState(initialPlayPrompt);
+  const [moviePrompt, setMoviePrompt] = useState(initialMoviePrompt);
   const [movieImage, setMovieImage] = useState<File | null>(null);
   const [movieSetupError, setMovieSetupError] = useState("");
   const [activeImageName, setActiveImageName] = useState("Dawn forest seed");
@@ -198,6 +221,9 @@ export default function App() {
   const [actionDraft, setActionDraft] = useState("");
   const [isActionPending, setIsActionPending] = useState(false);
   const [hasVideo, setHasVideo] = useState(false);
+  const [hasCapturableFrame, setHasCapturableFrame] = useState(false);
+  const [isTheaterMode, setIsTheaterMode] = useState(false);
+  const [stageFeedback, setStageFeedback] = useState("");
   const [voiceStatus, setVoiceStatus] = useState<"idle" | "recording" | "transcribing">("idle");
   const [voiceFeedback, setVoiceFeedback] = useState("");
 
@@ -220,6 +246,7 @@ export default function App() {
       if (!videoRef.current) return;
       videoRef.current.srcObject = stream;
       setHasVideo(true);
+      setHasCapturableFrame(false);
       void videoRef.current.play().catch(() => undefined);
     });
     model.onState((state: LingbotState) => {
@@ -275,6 +302,7 @@ export default function App() {
       if (!videoRef.current) return;
       videoRef.current.srcObject = stream;
       setHasVideo(true);
+      setHasCapturableFrame(false);
       void videoRef.current.play().catch(() => undefined);
     });
     model.onState((state) => {
@@ -307,7 +335,7 @@ export default function App() {
     return payload.jwt as string;
   }, []);
 
-  const startSession = useCallback(async () => {
+  const startSession = useCallback(async (initialWorld?: InitialWorld) => {
     try {
       setModelStatus("connecting");
       const jwt = await getToken();
@@ -316,14 +344,17 @@ export default function App() {
       attachModelListeners(model);
       await model.connect(jwt);
 
-      const image = activeImageRef.current || await defaultImageAsPng();
+      const image = initialWorld
+        ? await imageFileFromUrl(initialWorld.image, `${initialWorld.name.toLowerCase().replaceAll(" ", "-")}.png`)
+        : activeImageRef.current || await defaultImageAsPng();
       activeImageRef.current = image;
+      if (initialWorld) setActiveImageName(initialWorld.name);
       if (!activeImageRef.current) throw new Error("No reference image is ready.");
 
       await model.setSeed({ seed: seedRef.current });
       const fileRef = await model.uploadFile(image);
       await setImageAndWaitForAcceptance(model, fileRef);
-      await model.setPrompt({ prompt });
+      await model.setPrompt({ prompt: initialWorld?.playPrompt || prompt });
       await model.start();
     } catch (caught) {
       setStatus("error");
@@ -634,6 +665,7 @@ export default function App() {
   }, [status]);
 
   const returnToChoice = useCallback(async () => {
+    if (document.fullscreenElement === appShellRef.current) void document.exitFullscreen();
     const model = experience === "play" ? modelRef.current : movieModelRef.current;
     try {
       if (model && status === "generating") await model.pause();
@@ -655,6 +687,7 @@ export default function App() {
     setError("");
     setFrozenFrame(null);
     setHasVideo(false);
+    setHasCapturableFrame(false);
     setChunk(0);
     if (videoRef.current) {
       videoRef.current.pause();
@@ -668,6 +701,19 @@ export default function App() {
     setRemainingSeconds(SESSION_SECONDS);
     sessionStartedAtRef.current = null;
     void startSession();
+  }, [startSession]);
+
+  const chooseFeaturedWorld = useCallback((preset: PromptPreset) => {
+    basePromptRef.current = preset.playPrompt;
+    setPrompt(preset.playPrompt);
+    setDraftPrompt(preset.playPrompt);
+    setSelectedImage(null);
+    setActiveImageName(preset.name);
+    setExperience("play");
+    setPanelOpen(true);
+    setRemainingSeconds(SESSION_SECONDS);
+    sessionStartedAtRef.current = null;
+    void startSession(preset);
   }, [startSession]);
 
   const chooseWatch = useCallback(() => {
@@ -756,6 +802,25 @@ export default function App() {
   }, [releaseMicrophone]);
 
   useEffect(() => {
+    const onFullscreenChange = () => setIsTheaterMode(document.fullscreenElement === appShellRef.current);
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, []);
+
+  useEffect(() => () => {
+    if (stageFeedbackTimerRef.current !== undefined) window.clearTimeout(stageFeedbackTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!sharedPlayLaunchRef.current) return;
+    const timeoutId = window.setTimeout(() => {
+      sharedPlayLaunchRef.current = false;
+      choosePlay();
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [choosePlay]);
+
+  useEffect(() => {
     const interval = window.setInterval(() => {
       if ((experience !== "play" && experience !== "watch") || !sessionStartedAtRef.current || status === "paused" || status === "expired" || status === "idle" || sessionLimitPendingRef.current) return;
       const elapsed = Math.floor((Date.now() - sessionStartedAtRef.current) / 1000);
@@ -808,9 +873,50 @@ export default function App() {
   };
 
   const canUseVoice = status === "generating" || status === "ready";
+  const watchEstimate = formatDollars((WATCH_SECONDS / 3600) * HELIOS_DOLLARS_PER_HOUR);
+  const showStageFeedback = (message: string) => {
+    setStageFeedback(message);
+    if (stageFeedbackTimerRef.current !== undefined) window.clearTimeout(stageFeedbackTimerRef.current);
+    stageFeedbackTimerRef.current = window.setTimeout(() => setStageFeedback(""), 2_500);
+  };
+  const takeSnapshot = () => {
+    if (!videoRef.current || !downloadVideoFrame(videoRef.current, experience === "watch" ? "watch" : "play")) {
+      setHasCapturableFrame(false);
+      return;
+    }
+    showStageFeedback("Snapshot saved");
+  };
+  const toggleTheaterMode = async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else {
+        setPanelOpen(false);
+        await appShellRef.current?.requestFullscreen();
+      }
+    } catch {
+      showStageFeedback("Fullscreen is unavailable");
+    }
+  };
+  const shareScene = async () => {
+    const mode = experience === "watch" ? "watch" : "play";
+    const scenePrompt = (mode === "watch" ? moviePrompt : prompt).trim();
+    if (!scenePrompt) return;
+    const url = buildSharedSceneUrl(window.location.href, { mode, prompt: scenePrompt });
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "Living Worlds", text: "Enter this Living World", url });
+        return;
+      }
+      await navigator.clipboard.writeText(url);
+      showStageFeedback("Link copied");
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") return;
+      window.prompt("Copy your scene link:", url);
+    }
+  };
 
   return (
-    <main className="app-shell">
+    <main ref={appShellRef} className={`app-shell ${isTheaterMode ? "is-theater" : ""}`}>
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <header className="topbar">
@@ -831,7 +937,14 @@ export default function App() {
 
       <section className="world-stage">
         <div className="world-backdrop" aria-hidden="true" style={{ backgroundImage: `url(${DEFAULT_WORLD_IMAGE})` }} />
-        <video ref={videoRef} className={`world-video ${hasVideo ? "has-video" : ""}`} autoPlay playsInline muted />
+        <video
+          ref={videoRef}
+          className={`world-video ${hasVideo ? "has-video" : ""}`}
+          autoPlay
+          playsInline
+          muted
+          onLoadedData={(event) => setHasCapturableFrame(Boolean(event.currentTarget.videoWidth && event.currentTarget.videoHeight))}
+        />
         {frozenFrame && <img className="frozen-frame" src={frozenFrame} alt="The last frame of the world" />}
         <div className="vignette" />
         <div className="scanline" />
@@ -840,12 +953,20 @@ export default function App() {
           <div className="entry-card">
             <p className="eyebrow accent">CHOOSE YOUR EXPERIENCE</p>
             <h2>Enter the unknown.</h2>
-            <p>Play inside a living world, or watch a real-time AI movie unfold from the same scene.</p>
+            <p>Choose a featured world to enter it immediately, or direct a real-time movie yourself.</p>
+            <div className="featured-worlds" aria-label="Featured worlds">
+              {PROMPT_PRESETS.map((preset) => (
+                <button type="button" key={preset.name} onClick={() => chooseFeaturedWorld(preset)}>
+                  <img src={preset.image} alt="" />
+                  <span><strong>{preset.name}</strong><small>Play now ↗</small></span>
+                </button>
+              ))}
+            </div>
             <div className="entry-choices">
               <button className="experience-choice play-choice" onClick={choosePlay}>
                 <span className="eyebrow accent">PLAY</span>
-                <strong>Step into the world <b>↗</b></strong>
-                <small>Move, explore, and direct the scene in real time.</small>
+                <strong>Start from scratch <b>↗</b></strong>
+                <small>Move, explore, and direct your own scene in real time.</small>
               </button>
               <button className="experience-choice watch-choice" onClick={chooseWatch}>
                 <span className="eyebrow accent">WATCH</span>
@@ -861,7 +982,7 @@ export default function App() {
           <div className="entry-card movie-setup-card">
             <p className="eyebrow accent">HELIOS MOVIE SETUP</p>
             <h2>Direct the opening shot.</h2>
-            <p>Choose a prompt and optional visual anchor before the live movie begins.</p>
+            <p>Your prompt directs the movie. An image is optional and anchors its opening shot.</p>
             <label className="field-label" htmlFor="movie-prompt">Movie direction</label>
             <textarea
               id="movie-prompt"
@@ -870,6 +991,14 @@ export default function App() {
               placeholder="A cinematic journey through a moonlit forest…"
               rows={5}
             />
+            <div className="prompt-presets" aria-label="Movie prompt presets">
+              {PROMPT_PRESETS.map((preset) => (
+                <button type="button" key={preset.name} onClick={() => { setMoviePrompt(preset.watchPrompt); setMovieSetupError(""); }}>
+                  <img src={preset.image} alt="" />
+                  <span>{preset.name}</span>
+                </button>
+              ))}
+            </div>
             <label className="field-label movie-image-label" htmlFor="movie-image">Reference image</label>
             <label className="upload-zone" htmlFor="movie-image">
               <span className="upload-icon">↥</span>
@@ -877,6 +1006,7 @@ export default function App() {
               <input id="movie-image" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={handleMovieImageChange} />
             </label>
             {movieSetupError && <p className="movie-setup-error" role="alert">{movieSetupError}</p>}
+            <p className="watch-budget">{formatTime(WATCH_SECONDS)} session · {watchEstimate} estimated at $6/hour</p>
             <div className="button-row movie-setup-actions">
               <button className="primary-button" onClick={startConfiguredMovie} disabled={!moviePrompt.trim()}>Start real-time movie <span>▶</span></button>
               <button className="ghost-button" onClick={cancelMovieSetup}>Back</button>
@@ -929,22 +1059,31 @@ export default function App() {
         {experience === "play" && status !== "idle" && status !== "connecting" && status !== "error" && status !== "expired" && (
           <div className="stage-bottom">
             <div className="control-hint"><span className="keycap">W</span><span className="keycap">A</span><span className="keycap">S</span><span className="keycap">D</span><span>move</span><span className="arrow-hint">← ↑ ↓ →</span><span>look</span></div>
-            <button className="view-button" onClick={() => setPanelOpen((open) => !open)}>
-              {panelOpen ? "Close world controls" : "Open world controls"} <span>{panelOpen ? "×" : "＋"}</span>
-            </button>
+            <div className="stage-actions">
+              <button className="view-button" onClick={takeSnapshot} disabled={!hasCapturableFrame}>{hasCapturableFrame ? "Snapshot" : "Waiting for video"}</button>
+              <button className="view-button" onClick={() => void shareScene()}>Share scene</button>
+              <button className="view-button" onClick={() => void toggleTheaterMode()}>{isTheaterMode ? "Exit theater" : "Theater mode"}</button>
+              <button className="view-button" onClick={() => setPanelOpen((open) => !open)}>
+                {panelOpen ? "Close world controls" : "Open world controls"} <span>{panelOpen ? "×" : "＋"}</span>
+              </button>
+            </div>
           </div>
         )}
 
         {experience === "watch" && status !== "idle" && status !== "connecting" && status !== "error" && status !== "expired" && (
           <div className="stage-bottom movie-stage-controls">
-            <span className="movie-label">PASSIVE REAL-TIME MOVIE · {formatTime(watchRemainingSeconds)}</span>
+            <span className="movie-label">PASSIVE REAL-TIME MOVIE · {formatTime(watchRemainingSeconds)} · {watchEstimate} EST.</span>
             <div className="movie-controls">
+              <button className="view-button" onClick={takeSnapshot} disabled={!hasCapturableFrame}>{hasCapturableFrame ? "Snapshot" : "Waiting for video"}</button>
+              <button className="view-button" onClick={() => void shareScene()}>Share scene</button>
+              <button className="view-button" onClick={() => void toggleTheaterMode()}>{isTheaterMode ? "Exit theater" : "Theater mode"}</button>
               <button className="view-button" onClick={() => void toggleMoviePause()}>{status === "paused" ? "Resume" : "Pause"}</button>
               <button className="view-button" onClick={() => void restartMovie()}>Restart</button>
               <button className="view-button" onClick={() => void returnToChoice()}>Back</button>
             </div>
           </div>
         )}
+        {stageFeedback && <p className="stage-feedback" role="status">{stageFeedback}</p>}
       </section>
 
       {experience === "play" && <aside className={`control-panel ${panelOpen ? "is-open" : ""}`}>
@@ -959,9 +1098,12 @@ export default function App() {
         <form onSubmit={handleSubmit}>
           <label className="field-label" htmlFor="world-prompt">Scene direction</label>
           <textarea id="world-prompt" value={draftPrompt} onChange={(event) => setDraftPrompt(event.target.value)} placeholder="Make it snow…" rows={5} />
-          <div className="suggestions">
-            {["make it snow", "ancient ruins", "turn into a desert"].map((suggestion) => (
-              <button type="button" key={suggestion} onClick={() => setDraftPrompt((current) => `${current}. ${suggestion}.`)}>{suggestion}</button>
+          <div className="prompt-presets" aria-label="Scene prompt presets">
+            {PROMPT_PRESETS.map((preset) => (
+              <button type="button" key={preset.name} onClick={() => setDraftPrompt(preset.playPrompt)}>
+                <img src={preset.image} alt="" />
+                <span>{preset.name}</span>
+              </button>
             ))}
           </div>
           <label className="field-label" htmlFor="world-image">Reference image</label>
@@ -1022,7 +1164,7 @@ export default function App() {
             >
               {voiceStatus === "recording" ? "Release to send" : voiceStatus === "transcribing" ? "Transcribing…" : "Hold to talk"}
             </button>
-            <p className="voice-command-hint">Say an action, or “Change world to …” for a new scene.</p>
+            <p className="voice-command-hint">Try “find shelter” or “turn left”. Say “Change world to snowy ruins” for a new scene.</p>
             {voiceFeedback && <p className="voice-feedback" role="status">{voiceFeedback}</p>}
           </div>
         </div>

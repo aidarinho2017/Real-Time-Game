@@ -15,6 +15,7 @@ __pycache__/
 node_modules/
 dist/
 .voice-test/
+.share-test/
 .vite/
 coverage/
 

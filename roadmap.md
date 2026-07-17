@@ -1,60 +1,37 @@
 # Living Worlds roadmap
 
-This roadmap is ordered by visitor impact per unit of implementation effort. It favors client-side additions that reuse the existing Reactor, Deepgram, and browser capabilities.
+This roadmap favors the smallest client-side changes that make a desktop or kiosk demo feel immediate, cinematic, and worth sharing.
 
-## Now
+## Shipped
 
-### 1. Prompt presets
+- Prompt presets with visual thumbnails in Play and Watch setup.
+- Browser JPEG snapshots, including a clear unavailable state before the first frame.
+- Watch duration and `$6/hour` estimate disclosure with an active countdown.
+- First-run movement, voice, and movie-direction guidance.
 
-Add a small set of scene and movie templates that fill the existing prompt fields without automatically starting or resetting a session.
-
-- **Visitor value:** removes blank-page friction and makes the demo immediately explorable.
-- **Scope:** static prompt chips/cards only; no prompt-generation service.
-- **Done when:** Play and Watch setup each offer 4–6 distinct presets that populate the relevant textarea.
-
-### 2. Snapshot download
-
-Add a button in Play and Watch that saves the currently visible video frame as a JPEG in the browser.
-
-- **Visitor value:** gives every successful session a shareable outcome.
-- **Scope:** client-side capture/download only; no gallery, account, or upload service.
-- **Done when:** the current frame downloads with a descriptive filename and a clear unavailable state before video arrives.
-
-### 3. Clear Watch budget disclosure
-
-Show the Watch duration and estimated credit usage before starting Helios, then keep the remaining session time visible during playback.
-
-- **Visitor value:** makes the premium stream feel intentional rather than abruptly interrupted.
-- **Scope:** presentation based on configured limits; no billing integration.
-- **Done when:** setup explains the two-minute default and active Watch shows its countdown.
-
-### 4. First-run guidance
-
-Add concise contextual hints: movement keys in Play, natural voice examples, and one sentence explaining the Watch setup image/prompt.
-
-- **Visitor value:** reduces hesitation without a long tutorial.
-- **Scope:** inline copy only, dismissible only if needed after usability testing.
-- **Done when:** a new visitor can discover movement, voice, and movie direction without documentation.
+- Featured worlds that immediately start Play with the matching prompt and bundled Reactor reference image.
+- Native Theater mode for unobstructed fullscreen Play and Watch.
+- Scene sharing through the native share sheet or clipboard; Watch restores setup and Play launches the shared prompt.
+- In-app confirmation after a snapshot download.
 
 ## Next
 
-### Remember local settings
+### Kiosk handoff
 
-Persist the last Play and Watch prompts in browser storage, plus image names only (not image data).
+Return an inactive or completed demo to the landing screen after a short, visible countdown.
 
-- **Visitor value:** makes a return visit feel continuous without introducing accounts.
-- **Scope:** local browser storage; no cross-device sync or cloud session history.
+- **Visitor value:** each new visitor inherits a clean, inviting first screen.
+- **Scope:** client-side idle timer only; never interrupt active input, recording, or generation.
 
-### Share prompt links
+### Presenter-safe reset
 
-Add a share action that encodes the active prompt and selected mode in the URL.
+Add one action that returns the app to its default world and closes any fullscreen state.
 
-- **Visitor value:** lets visitors reproduce an idea with one link.
-- **Scope:** prompt and mode only; uploaded images are deliberately excluded.
+- **Visitor value:** a presenter can recover instantly between visitors.
+- **Scope:** reset local UI and the active model session; no new server route.
 
-### Privacy-safe telemetry
+## Later
 
-Add aggregate events for mode selection, first frame, snapshot, error category, and session completion after an analytics destination and privacy policy are selected.
-
-- **Visitor value:** helps improve the demo using real friction data.
-- **Scope:** no transcript, prompt text, image, or raw video capture.
+- Mobile/touch movement controls after desktop and kiosk usage proves the need.
+- Privacy-safe aggregate telemetry after a destination and privacy policy are selected.
+- Local settings persistence or cloud history only if return usage justifies it.
