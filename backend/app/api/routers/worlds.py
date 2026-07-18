@@ -8,13 +8,14 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Upload
 from fastapi.responses import Response
 
 from ..schemas import WorldPage, WorldResponse
-from ...domain.worlds import World, WorldMode
+from ...domain.worlds import EditSourceType, World, WorldMode
 from ...services.gallery import (
     GalleryError,
     GalleryValidationError,
     InvalidCursorError,
     get_world,
     get_world_image,
+    get_world_reference_image,
     list_worlds,
     save_world,
     validate_image,
@@ -30,6 +31,13 @@ def world_response(world: World, request: Request) -> WorldResponse:
         prompt=world.prompt,
         seed=world.seed,
         image_url=str(request.url_for("read_world_image", world_id=str(world.id))),
+        source_type=world.source_type,
+        keep_backlog=world.keep_backlog,
+        reference_image_url=(
+            str(request.url_for("read_world_reference_image", world_id=str(world.id)))
+            if world.reference_image_key
+            else None
+        ),
         created_at=world.created_at,
     )
 
@@ -41,6 +49,9 @@ async def create_world(
     prompt: str = Form(max_length=2_000),
     seed: int = Form(ge=0, le=2_000_000_000),
     image: UploadFile = File(),
+    source_type: EditSourceType | None = Form(default=None),
+    keep_backlog: bool | None = Form(default=None),
+    reference_image: UploadFile | None = File(default=None),
 ) -> WorldResponse:
     prompt = prompt.strip()
     if not prompt:
@@ -48,11 +59,36 @@ async def create_world(
     try:
         image_data = await image.read(10 * 1024 * 1024 + 1)
         validated_image = validate_image(image_data)
+        reference_image_data = await reference_image.read(10 * 1024 * 1024 + 1) if reference_image else None
+        validated_reference_image = validate_image(reference_image_data) if reference_image_data else None
     except GalleryValidationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    if mode == "edit" and (source_type is None or keep_backlog is None):
+        raise HTTPException(status_code=422, detail="Edit gallery entries need a source type and backlog setting.")
+    if mode != "edit":
+        source_type = None
+        keep_backlog = None
     filename = Path(image.filename or f"reference.{validated_image.extension}").name
+    reference_filename = (
+        Path(reference_image.filename or f"reference.{validated_reference_image.extension}").name
+        if reference_image and validated_reference_image
+        else None
+    )
     try:
-        world = await asyncio.to_thread(save_world, mode, prompt, seed, image_data, filename, validated_image)
+        world = await asyncio.to_thread(
+            save_world,
+            mode,
+            prompt,
+            seed,
+            image_data,
+            filename,
+            validated_image,
+            source_type,
+            keep_backlog,
+            reference_image_data,
+            reference_filename,
+            validated_reference_image,
+        )
     except GalleryError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return world_response(world, request)
@@ -94,3 +130,15 @@ async def read_world_image(world_id: UUID) -> Response:
         raise HTTPException(status_code=404, detail="This saved world does not exist.")
     world, image_data = result
     return Response(content=image_data, media_type=world.image_content_type)
+
+
+@router.get("/{world_id}/reference-image", name="read_world_reference_image")
+async def read_world_reference_image(world_id: UUID) -> Response:
+    try:
+        result = await asyncio.to_thread(get_world_reference_image, world_id)
+    except GalleryError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="This saved world has no reference image.")
+    world, image_data = result
+    return Response(content=image_data, media_type=world.reference_image_content_type or "image/jpeg")

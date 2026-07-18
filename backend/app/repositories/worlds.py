@@ -7,9 +7,9 @@ from uuid import UUID
 from psycopg.rows import dict_row
 
 from ..core.database import connect
-from ..domain.worlds import World, WorldMode
+from ..domain.worlds import EditSourceType, World, WorldMode
 
-WORLD_COLUMNS = "id, mode, prompt, seed, image_key, image_filename, image_content_type, created_at"
+WORLD_COLUMNS = "id, mode, prompt, seed, image_key, image_filename, image_content_type, created_at, source_type, keep_backlog, reference_image_key, reference_image_filename, reference_image_content_type"
 
 
 def world_from_row(row: dict[str, Any]) -> World:
@@ -24,14 +24,19 @@ def create_world(
     image_key: str,
     image_filename: str,
     image_content_type: str,
+    source_type: EditSourceType | None = None,
+    keep_backlog: bool | None = None,
+    reference_image_key: str | None = None,
+    reference_image_filename: str | None = None,
+    reference_image_content_type: str | None = None,
 ) -> World:
     with connect() as connection:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
-                f"""INSERT INTO worlds ({WORLD_COLUMNS.removesuffix(', created_at')})
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                f"""INSERT INTO worlds ({WORLD_COLUMNS.removesuffix(', created_at, source_type, keep_backlog, reference_image_key, reference_image_filename, reference_image_content_type')})
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING {WORLD_COLUMNS}""",
-                (world_id, mode, prompt, seed, image_key, image_filename, image_content_type),
+                (world_id, mode, prompt, seed, image_key, image_filename, image_content_type, source_type, keep_backlog, reference_image_key, reference_image_filename, reference_image_content_type),
             )
             row = cursor.fetchone()
     if row is None:

@@ -11,6 +11,7 @@ export const DEFAULT_WORLD_IMAGE = defaultWorldImage;
 export const DEFAULT_SESSION_SECONDS = 600;
 export const DEFAULT_WATCH_SECONDS = 120;
 export const HELIOS_DOLLARS_PER_HOUR = 6;
+export const X2_DOLLARS_PER_HOUR = 6;
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_VOICE_AUDIO_BYTES = 10 * 1024 * 1024;
 

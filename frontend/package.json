@@ -13,6 +13,7 @@
   "dependencies": {
     "@reactor-models/helios": "^0.9.15",
     "@reactor-models/lingbot-world-2": "https://registry.npmjs.org/@reactor-models/lingbot-world-2/-/lingbot-world-2-0.3.2.tgz",
+    "@reactor-models/x2": "^0.5.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

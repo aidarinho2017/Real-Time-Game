@@ -7,4 +7,5 @@ test("shares and restores a mode and prompt without dropping other URL parameter
   assert.deepEqual(parseSharedScene(new URL(url).search), { mode: "watch", prompt: "Moonlit ruins" });
   assert.equal(new URL(url).searchParams.get("source"), "invite");
   assert.equal(parseSharedScene("?mode=play&prompt=%20%20"), null);
+  assert.deepEqual(parseSharedScene("?mode=edit&prompt=make%20it%20clay"), { mode: "edit", prompt: "make it clay" });
 });

@@ -1,8 +1,8 @@
 # Living Worlds
 
-**A real-time AI demo where you can enter a generated world or direct a live movie.**
+**A real-time AI demo where you can enter a generated world, direct a live movie, or edit your own video.**
 
-Living Worlds pairs Reactor world and movie models with a small browser experience built for demos, kiosks, and curious first-time visitors. Choose a featured world to start playing immediately, or shape a Helios movie with your own prompt and image.
+Living Worlds pairs Reactor world, movie, and video-editing models with a small browser experience built for demos, kiosks, and curious first-time visitors. Choose a featured world, shape a Helios movie, or edit a webcam, clip, or still image with X2.
 
 ## Screenshots
 
@@ -26,7 +26,8 @@ Living Worlds pairs Reactor world and movie models with a small browser experien
 - **Enter a featured world in one click.** Each curated world starts Play with its matching prompt and reference image.
 - **Play a living world.** Move with the keyboard, reshape the scene, upload a reference image, or hold to talk in English.
 - **Direct a real-time movie.** Set a prompt and optional visual anchor, then watch Helios generate live.
-- **Keep or share the moment.** Save a prompt, seed, and reference image to the public gallery; download a JPEG snapshot; or share the current mode and prompt.
+- **Edit your own video.** Use X2 with a webcam, uploaded clip, or still image; change its prompt live, add a reference image, drag to steer, and choose smoothness versus latency.
+- **Keep or share the moment.** Save a prompt, settings, and public output frame to the gallery; download a JPEG snapshot; or share the current mode and prompt.
 
 ## Run locally
 
@@ -35,7 +36,7 @@ Living Worlds pairs Reactor world and movie models with a small browser experien
 - Python 3.11+
 - Node.js 20+
 - Docker Compose (for local PostgreSQL and MinIO gallery storage)
-- A Reactor API key with access to `lingbot-world-2` and `helios`
+- A Reactor API key with access to `lingbot-world-2`, `helios`, and `x2`
 - A Deepgram API key for English speech-to-text
 
 ### Setup
@@ -72,6 +73,13 @@ See [voice controls](docs/voice-controls.md) for voice behavior and troubleshoot
 - Watch includes a two-minute default session cap and an estimate based on Helios at `$6/hour`.
 - Pause, restart, capture, share, or enter Theater mode while the movie runs.
 
+### Edit
+
+- Choose **Webcam**, **Video clip**, or **Still image** as the private source sent to X2.
+- Set an edit instruction, optionally add a character/object reference image, and drag the output to steer the subject.
+- Toggle **Keep every source frame** for smoother clip/image motion; leave it off for lowest webcam latency.
+- Edit sessions stop after two minutes. Saving to the gallery stores an edited frame and settings, never the input video.
+
 ## Configuration
 
 Copy `frontend/.env.example` to `frontend/.env` only when you need different local demo limits:
@@ -85,7 +93,7 @@ The backend also accepts `CORS_ORIGINS` in `backend/.env`; its default allows th
 
 ## Architecture and privacy
 
-The React frontend connects directly to the selected Reactor model after FastAPI exchanges the private Reactor API key for a short-lived browser token. Voice recordings are sent to Deepgram only for transcription and are not stored by this app. The public gallery permanently stores prompts, seeds, and reference images, but not live video, voice recordings, or resumable model sessions.
+The React frontend connects directly to the selected Reactor model after FastAPI exchanges the private Reactor API key for a short-lived browser token. Voice recordings are sent to Deepgram only for transcription and are not stored by this app. The public gallery permanently stores Play/Watch prompts and images, plus X2 edit prompts, settings, output frames, and optional reference images. It never stores webcam feeds, uploaded source videos, voice recordings, or resumable model sessions.
 
 ## Checks
 

@@ -52,7 +52,9 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .world-backdrop { background-position: center; background-size: cover; filter: saturate(0.8) brightness(0.65); transform: scale(1.03); }
 .world-video { object-fit: cover; opacity: 0; transition: opacity 1s ease; }
 .world-video.has-video { opacity: 1; }
-.frozen-frame { object-fit: cover; z-index: 2; }
+.source-video { display: none; }
+.frozen-frame { object-fit: cover; z-index: 2; pointer-events: none; }
+.edit-pointer-layer { position: absolute; z-index: 4; inset: 0; cursor: crosshair; touch-action: none; }
 .vignette { z-index: 3; pointer-events: none; background: radial-gradient(ellipse at center, transparent 35%, rgba(3, 9, 8, 0.24) 75%, rgba(3, 8, 8, 0.77) 100%), linear-gradient(180deg, rgba(3, 9, 8, 0.38), transparent 23%, transparent 72%, rgba(3, 9, 8, 0.52)); }
 .scanline { z-index: 3; opacity: 0.08; pointer-events: none; background: repeating-linear-gradient(0deg, transparent 0, transparent 3px, rgba(221, 247, 220, 0.4) 4px); mix-blend-mode: overlay; }
 .entry-card, .loading-card, .message-card { position: absolute; z-index: 5; left: 10vw; top: 50%; transform: translateY(-50%); max-width: 650px; }
@@ -83,6 +85,12 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .movie-image-label { margin-top: 22px; }
 .movie-setup-error { margin: -8px 0 16px !important; color: var(--danger) !important; font: 10px "DM Mono", monospace !important; }
 .movie-setup-actions { justify-content: space-between; }
+.edit-source-choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 12px 0 20px; }
+.edit-source-choices button { border: 1px solid var(--line); padding: 10px 6px; color: var(--muted); background: rgba(2, 9, 8, 0.58); font: 9px "DM Mono", monospace; text-transform: uppercase; }
+.edit-source-choices button.is-active { border-color: var(--mint); color: #112117; background: var(--mint); }
+.backlog-toggle { display: block; margin: 3px 0 20px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.backlog-toggle input { margin: 0 8px 0 0; accent-color: var(--mint); }
+.backlog-toggle small { display: block; margin: 5px 0 0 22px; color: var(--subtle); font: 9px/1.5 "DM Mono", monospace; }
 .watch-budget { margin: 0 0 17px !important; color: var(--mint) !important; font: 10px "DM Mono", monospace !important; }
 .microcopy { margin-top: 17px !important; color: var(--subtle) !important; font: 10px "DM Mono", monospace !important; }
 .gallery-link { margin-top: 14px; }

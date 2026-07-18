@@ -13,7 +13,7 @@ from PIL import Image, UnidentifiedImageError
 
 from ..core.database import initialize_database
 from ..core.storage import delete_image, initialize_bucket, put_image, read_image
-from ..domain.worlds import World, WorldMode
+from ..domain.worlds import EditSourceType, World, WorldMode
 from ..repositories import worlds
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -74,6 +74,10 @@ def image_key(world_id: UUID, extension: str) -> str:
     return f"worlds/{world_id}.{extension}"
 
 
+def reference_image_key(world_id: UUID, extension: str) -> str:
+    return f"worlds/{world_id}-reference.{extension}"
+
+
 def save_world(
     mode: WorldMode,
     prompt: str,
@@ -81,17 +85,41 @@ def save_world(
     image_data: bytes,
     image_filename: str,
     image: ValidatedImage,
+    source_type: EditSourceType | None = None,
+    keep_backlog: bool | None = None,
+    reference_image_data: bytes | None = None,
+    reference_image_filename: str | None = None,
+    reference_image: ValidatedImage | None = None,
 ) -> World:
     world_id = uuid4()
     key = image_key(world_id, image.extension)
+    reference_key = reference_image_key(world_id, reference_image.extension) if reference_image else None
     try:
         put_image(key, image_data, image.content_type)
-        return worlds.create_world(world_id, mode, prompt, seed, key, image_filename, image.content_type)
+        if reference_key and reference_image_data and reference_image:
+            put_image(reference_key, reference_image_data, reference_image.content_type)
+        return worlds.create_world(
+            world_id,
+            mode,
+            prompt,
+            seed,
+            key,
+            image_filename,
+            image.content_type,
+            source_type,
+            keep_backlog,
+            reference_key,
+            reference_image_filename,
+            reference_image.content_type if reference_image else None,
+        )
     except (BotoCoreError, ClientError, psycopg.Error, RuntimeError) as exc:
-        try:
-            delete_image(key)
-        except (BotoCoreError, ClientError):
-            pass
+        for image_to_delete in (key, reference_key):
+            if not image_to_delete:
+                continue
+            try:
+                delete_image(image_to_delete)
+            except (BotoCoreError, ClientError):
+                pass
         raise GalleryError("Could not save this world.") from exc
 
 
@@ -135,3 +163,13 @@ def get_world_image(world_id: UUID) -> tuple[World, bytes] | None:
         return world, read_image(world.image_key)
     except (BotoCoreError, ClientError) as exc:
         raise GalleryError("Could not load this world image.") from exc
+
+
+def get_world_reference_image(world_id: UUID) -> tuple[World, bytes] | None:
+    world = get_world(world_id)
+    if world is None or world.reference_image_key is None:
+        return None
+    try:
+        return world, read_image(world.reference_image_key)
+    except (BotoCoreError, ClientError) as exc:
+        raise GalleryError("Could not load this world reference image.") from exc

@@ -1,4 +1,4 @@
-export type SharedSceneMode = "play" | "watch";
+export type SharedSceneMode = "play" | "watch" | "edit";
 
 export interface SharedScene {
   mode: SharedSceneMode;
@@ -9,7 +9,7 @@ export function parseSharedScene(search: string): SharedScene | null {
   const params = new URLSearchParams(search);
   const mode = params.get("mode");
   const prompt = params.get("prompt")?.trim();
-  if ((mode !== "play" && mode !== "watch") || !prompt) return null;
+  if ((mode !== "play" && mode !== "watch" && mode !== "edit") || !prompt) return null;
   return { mode, prompt };
 }
 

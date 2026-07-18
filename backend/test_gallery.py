@@ -35,6 +35,22 @@ class GalleryValidationTest(unittest.TestCase):
                 gallery.save_world("play", "A test world", 42, png_bytes(), "test.png", image)
         delete_image.assert_called_once()
 
+    def test_save_edit_keeps_only_output_and_reference_images(self) -> None:
+        output = gallery.ValidatedImage("image/png", "png")
+        reference = gallery.ValidatedImage("image/png", "png")
+        saved_world = object()
+        with (
+            patch.object(gallery, "put_image") as put_image,
+            patch.object(gallery.worlds, "create_world", return_value=saved_world) as create_world,
+        ):
+            result = gallery.save_world(
+                "edit", "Make it clay", 42, png_bytes(), "output.png", output,
+                "video", True, png_bytes(), "character.png", reference,
+            )
+        self.assertIs(result, saved_world)
+        self.assertEqual(put_image.call_count, 2)
+        self.assertEqual(create_world.call_args.args[1:4], ("edit", "Make it clay", 42))
+
 
 if __name__ == "__main__":
     unittest.main()
