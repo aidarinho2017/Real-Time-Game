@@ -85,6 +85,24 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .movie-setup-actions { justify-content: space-between; }
 .watch-budget { margin: 0 0 17px !important; color: var(--mint) !important; font: 10px "DM Mono", monospace !important; }
 .microcopy { margin-top: 17px !important; color: var(--subtle) !important; font: 10px "DM Mono", monospace !important; }
+.gallery-link { margin-top: 14px; }
+.gallery-back { margin-top: 16px; }
+.gallery-card { width: min(700px, calc(100vw - 44px)); }
+.gallery-card h2 { font-size: clamp(34px, 5vw, 56px); }
+.gallery-filters { display: flex; gap: 7px; margin: 0 0 13px; }
+.gallery-filters button { border: 1px solid var(--line); padding: 8px 11px; color: var(--muted); background: rgba(8, 24, 20, 0.72); font: 10px "DM Mono", monospace; text-transform: uppercase; }
+.gallery-filters button.is-active { border-color: rgba(184, 244, 139, 0.6); color: #112117; background: var(--mint); }
+.gallery-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; max-height: 42vh; overflow-y: auto; padding-right: 3px; }
+.gallery-world { overflow: hidden; border: 1px solid var(--line); padding: 0; color: var(--paper); background: rgba(8, 24, 20, 0.72); text-align: left; }
+.gallery-world:hover { border-color: var(--mint); transform: translateY(-2px); }
+.gallery-world img { display: block; width: 100%; height: 102px; object-fit: cover; }
+.gallery-world span { display: block; min-height: 103px; padding: 9px; }
+.gallery-world small, .gallery-world em { display: block; color: var(--subtle); font: 8px "DM Mono", monospace; text-transform: uppercase; }
+.gallery-world strong { display: -webkit-box; overflow: hidden; margin: 7px 0; color: var(--paper); font-size: 10px; line-height: 1.35; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.gallery-world em { color: var(--mint); font-style: normal; }
+.gallery-message { margin: 18px 0; color: var(--muted); font-size: 12px; }
+.gallery-preview-card { max-height: calc(100vh - 130px); overflow-y: auto; }
+.gallery-preview-image { display: block; width: 100%; max-height: 200px; margin: 15px 0 19px; object-fit: cover; }
 .loading-card, .message-card { display: flex; gap: 18px; align-items: flex-start; padding: 24px; max-width: 490px; border: 1px solid rgba(184, 244, 139, 0.22); background: rgba(8, 17, 16, 0.68); backdrop-filter: blur(12px); }
 .loading-card h2, .message-card h2 { margin-top: 7px; font-size: 29px; }
 .loading-card p, .message-card p { margin-bottom: 0 !important; font-size: 12px !important; }
@@ -169,6 +187,7 @@ textarea:focus { border-color: rgba(184, 244, 139, 0.65); }
   .experience-choice strong { margin-top: 13px; }
   .featured-worlds { grid-template-columns: 1fr; }
   .featured-worlds button { min-height: 70px; }
+  .gallery-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 40vh; }
   .stage-bottom { left: 18px; right: 18px; bottom: 20px; }
   .control-hint { display: none; }
   .control-panel { top: 84px; right: 12px; bottom: 42px; left: 12px; width: auto; }

@@ -40,10 +40,18 @@ if [[ ! -x "$PYTHON" ]]; then
   python3 -m venv "$VENV_DIR"
 fi
 
-if ! "$PYTHON" -c 'import dotenv, fastapi, httpx, uvicorn' >/dev/null 2>&1; then
+if ! "$PYTHON" -c 'import boto3, dotenv, fastapi, httpx, PIL, psycopg, uvicorn' >/dev/null 2>&1; then
   echo "Installing backend dependencies into backend/.venv..."
   "$PYTHON" -m pip install -r "$BACKEND_DIR/requirements.txt"
 fi
+
+if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+  echo "Error: Docker Compose is required for the local gallery." >&2
+  exit 1
+fi
+
+echo "Starting local gallery storage..."
+docker compose up -d --wait postgres minio
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "Error: npm is required but was not found." >&2

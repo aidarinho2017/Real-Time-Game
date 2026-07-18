@@ -26,7 +26,7 @@ Living Worlds pairs Reactor world and movie models with a small browser experien
 - **Enter a featured world in one click.** Each curated world starts Play with its matching prompt and reference image.
 - **Play a living world.** Move with the keyboard, reshape the scene, upload a reference image, or hold to talk in English.
 - **Direct a real-time movie.** Set a prompt and optional visual anchor, then watch Helios generate live.
-- **Keep or share the moment.** Download a JPEG snapshot, share the current mode and prompt, or switch to Theater mode for a clean fullscreen view.
+- **Keep or share the moment.** Save a prompt, seed, and reference image to the public gallery; download a JPEG snapshot; or share the current mode and prompt.
 
 ## Run locally
 
@@ -34,6 +34,7 @@ Living Worlds pairs Reactor world and movie models with a small browser experien
 
 - Python 3.11+
 - Node.js 20+
+- Docker Compose (for local PostgreSQL and MinIO gallery storage)
 - A Reactor API key with access to `lingbot-world-2` and `helios`
 - A Deepgram API key for English speech-to-text
 
@@ -46,8 +47,9 @@ cp backend/.env.example backend/.env
 ./start.sh
 ```
 
-The launcher creates the backend virtual environment, installs missing dependencies, and starts:
+The launcher creates the backend virtual environment, starts the local gallery storage, and starts:
 
+- PostgreSQL and MinIO through Docker Compose
 - FastAPI at <http://127.0.0.1:8000>
 - Vite at <http://127.0.0.1:5173>
 
@@ -79,11 +81,11 @@ VITE_MAX_SESSION_SECONDS=600
 VITE_MAX_WATCH_SECONDS=120
 ```
 
-The backend also accepts `CORS_ORIGINS` in `backend/.env`; its default allows the local Vite addresses.
+The backend also accepts `CORS_ORIGINS` in `backend/.env`; its default allows the local Vite addresses. Gallery storage defaults to the local PostgreSQL and MinIO services in `docker-compose.yml`; override `DATABASE_URL` and the `S3_*` values when deploying elsewhere.
 
 ## Architecture and privacy
 
-The React frontend connects directly to the selected Reactor model after FastAPI exchanges the private Reactor API key for a short-lived browser token. Voice recordings are sent to Deepgram only for transcription and are not stored by this app. There are no accounts, cloud session history, uploaded-image storage, or billing integration.
+The React frontend connects directly to the selected Reactor model after FastAPI exchanges the private Reactor API key for a short-lived browser token. Voice recordings are sent to Deepgram only for transcription and are not stored by this app. The public gallery permanently stores prompts, seeds, and reference images, but not live video, voice recordings, or resumable model sessions.
 
 ## Checks
 
@@ -93,4 +95,10 @@ Run these from `frontend/`:
 npm run build
 npm run test:voice
 npm run test:share
+```
+
+Run backend checks from the repository root:
+
+```bash
+backend/.venv/bin/python -m unittest backend.test_voice_transcribe backend.test_gallery
 ```

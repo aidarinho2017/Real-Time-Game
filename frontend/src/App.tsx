@@ -34,9 +34,25 @@ const WATCH_SECONDS = Number.isFinite(configuredWatchSeconds) && configuredWatch
   ? configuredWatchSeconds
   : DEFAULT_WATCH_SECONDS;
 
-type Experience = "choose" | "play" | "watch-setup" | "watch";
+type Experience = "choose" | "gallery" | "gallery-preview" | "play" | "watch-setup" | "watch";
 type PromptPreset = (typeof PROMPT_PRESETS)[number];
 type InitialWorld = Pick<PromptPreset, "playPrompt" | "image" | "name">;
+type LaunchWorld = { prompt: string; image: File; name: string; seed: number };
+type GalleryMode = "all" | "play" | "watch";
+
+interface GalleryWorld {
+  id: string;
+  mode: "play" | "watch";
+  prompt: string;
+  seed: number;
+  image_url: string;
+  created_at: string;
+}
+
+interface GalleryPage {
+  items: GalleryWorld[];
+  next_cursor: string | null;
+}
 
 const statusLabels: Record<SessionStatus, string> = {
   idle: "Waiting to enter",
@@ -171,6 +187,14 @@ function formatDollars(amount: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
 }
 
+function formatGalleryDate(date: string): string {
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(new Date(date));
+}
+
+function promptExcerpt(prompt: string): string {
+  return prompt.replace(/\s+/g, " ").trim().slice(0, 90);
+}
+
 function imageValidationError(image: File): string | null {
   if (!image.type.startsWith("image/")) return "Choose an image file.";
   if (image.size > MAX_IMAGE_BYTES) return "Images must be 10 MB or smaller.";
@@ -226,6 +250,13 @@ export default function App() {
   const [stageFeedback, setStageFeedback] = useState("");
   const [voiceStatus, setVoiceStatus] = useState<"idle" | "recording" | "transcribing">("idle");
   const [voiceFeedback, setVoiceFeedback] = useState("");
+  const [galleryMode, setGalleryMode] = useState<GalleryMode>("all");
+  const [galleryWorlds, setGalleryWorlds] = useState<GalleryWorld[]>([]);
+  const [galleryNextCursor, setGalleryNextCursor] = useState<string | null>(null);
+  const [galleryStatus, setGalleryStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [galleryError, setGalleryError] = useState("");
+  const [selectedGalleryWorld, setSelectedGalleryWorld] = useState<GalleryWorld | null>(null);
+  const [isSavingWorld, setIsSavingWorld] = useState(false);
 
   const setModelStatus = useCallback((nextStatus: SessionStatus) => {
     setStatus(nextStatus);
@@ -335,7 +366,7 @@ export default function App() {
     return payload.jwt as string;
   }, []);
 
-  const startSession = useCallback(async (initialWorld?: InitialWorld) => {
+  const startSession = useCallback(async (initialWorld?: InitialWorld | LaunchWorld) => {
     try {
       setModelStatus("connecting");
       const jwt = await getToken();
@@ -345,16 +376,19 @@ export default function App() {
       await model.connect(jwt);
 
       const image = initialWorld
-        ? await imageFileFromUrl(initialWorld.image, `${initialWorld.name.toLowerCase().replaceAll(" ", "-")}.png`)
+        ? initialWorld.image instanceof File
+          ? initialWorld.image
+          : await imageFileFromUrl(initialWorld.image, `${initialWorld.name.toLowerCase().replaceAll(" ", "-")}.png`)
         : activeImageRef.current || await defaultImageAsPng();
       activeImageRef.current = image;
       if (initialWorld) setActiveImageName(initialWorld.name);
       if (!activeImageRef.current) throw new Error("No reference image is ready.");
 
+      if (initialWorld && "seed" in initialWorld) seedRef.current = initialWorld.seed;
       await model.setSeed({ seed: seedRef.current });
       const fileRef = await model.uploadFile(image);
       await setImageAndWaitForAcceptance(model, fileRef);
-      await model.setPrompt({ prompt: initialWorld?.playPrompt || prompt });
+      await model.setPrompt({ prompt: initialWorld ? ("playPrompt" in initialWorld ? initialWorld.playPrompt : initialWorld.prompt) : prompt });
       await model.start();
     } catch (caught) {
       setStatus("error");
@@ -362,7 +396,7 @@ export default function App() {
     }
   }, [attachModelListeners, getToken, modelRef, prompt, setModelStatus]);
 
-  const startMovie = useCallback(async () => {
+  const startMovie = useCallback(async (initialWorld?: LaunchWorld) => {
     try {
       setModelStatus("connecting");
       const jwt = await getToken();
@@ -371,11 +405,12 @@ export default function App() {
       attachMovieListeners(model);
       await model.connect(jwt);
 
-      const image = movieImageRef.current || await defaultImageAsPng();
+      const image = initialWorld?.image || movieImageRef.current || await defaultImageAsPng();
       movieImageRef.current = image;
       const fileRef = await model.uploadFile(image);
+      if (initialWorld) seedRef.current = initialWorld.seed;
       await model.setSeed({ seed: seedRef.current });
-      await setMovieConditioningAndWait(model, { image: fileRef, prompt: moviePrompt.trim() });
+      await setMovieConditioningAndWait(model, { image: fileRef, prompt: initialWorld?.prompt || moviePrompt.trim() });
       await model.start();
     } catch (caught) {
       setStatus("error");
@@ -666,7 +701,7 @@ export default function App() {
 
   const returnToChoice = useCallback(async () => {
     if (document.fullscreenElement === appShellRef.current) void document.exitFullscreen();
-    const model = experience === "play" ? modelRef.current : movieModelRef.current;
+    const model = experience === "play" ? modelRef.current : experience === "watch" ? movieModelRef.current : null;
     try {
       if (model && status === "generating") await model.pause();
       if (model) await model.reset();
@@ -689,6 +724,7 @@ export default function App() {
     setHasVideo(false);
     setHasCapturableFrame(false);
     setChunk(0);
+    setSelectedGalleryWorld(null);
     if (videoRef.current) {
       videoRef.current.pause();
       videoRef.current.srcObject = null;
@@ -737,6 +773,69 @@ export default function App() {
     setMovieSetupError("");
     setExperience("choose");
   }, []);
+
+  const openGallery = useCallback(() => {
+    setSelectedGalleryWorld(null);
+    setExperience("gallery");
+  }, []);
+
+  const openGalleryWorld = useCallback((world: GalleryWorld) => {
+    setSelectedGalleryWorld(world);
+    setExperience("gallery-preview");
+  }, []);
+
+  const loadMoreGallery = useCallback(async () => {
+    if (!galleryNextCursor || galleryStatus === "loading") return;
+    setGalleryStatus("loading");
+    try {
+      const params = new URLSearchParams({ limit: "24", cursor: galleryNextCursor });
+      if (galleryMode !== "all") params.set("mode", galleryMode);
+      const response = await fetch(`/api/worlds?${params}`);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || "Could not load more worlds.");
+      setGalleryWorlds((worlds) => [...worlds, ...(payload.items || [])]);
+      setGalleryNextCursor(payload.next_cursor || null);
+      setGalleryStatus("idle");
+    } catch (caught) {
+      setGalleryStatus("error");
+      setGalleryError(caught instanceof Error ? caught.message : "Could not load more worlds.");
+    }
+  }, [galleryMode, galleryNextCursor, galleryStatus]);
+
+  const launchGalleryWorld = useCallback(async () => {
+    if (!selectedGalleryWorld) return;
+    try {
+      setGalleryError("");
+      const image = await imageFileFromUrl(selectedGalleryWorld.image_url, `world-${selectedGalleryWorld.id}.png`);
+      const world: LaunchWorld = {
+        prompt: selectedGalleryWorld.prompt,
+        image,
+        name: promptExcerpt(selectedGalleryWorld.prompt),
+        seed: selectedGalleryWorld.seed,
+      };
+      if (selectedGalleryWorld.mode === "play") {
+        basePromptRef.current = world.prompt;
+        setPrompt(world.prompt);
+        setDraftPrompt(world.prompt);
+        setActiveImageName(world.name);
+        setExperience("play");
+        setPanelOpen(true);
+        setRemainingSeconds(SESSION_SECONDS);
+        sessionStartedAtRef.current = null;
+        void startSession(world);
+      } else {
+        setMoviePrompt(world.prompt);
+        movieImageRef.current = image;
+        setMovieImage(image);
+        setExperience("watch");
+        setWatchRemainingSeconds(WATCH_SECONDS);
+        sessionStartedAtRef.current = null;
+        void startMovie(world);
+      }
+    } catch (caught) {
+      setGalleryError(caught instanceof Error ? caught.message : "Could not prepare this saved world.");
+    }
+  }, [selectedGalleryWorld, startMovie, startSession]);
 
   const syncControls = useCallback(() => {
     const model = modelRef.current;
@@ -821,6 +920,31 @@ export default function App() {
   }, [choosePlay]);
 
   useEffect(() => {
+    if (experience !== "gallery") return;
+    const controller = new AbortController();
+    const loadGallery = async () => {
+      setGalleryStatus("loading");
+      setGalleryError("");
+      try {
+        const params = new URLSearchParams({ limit: "24" });
+        if (galleryMode !== "all") params.set("mode", galleryMode);
+        const response = await fetch(`/api/worlds?${params}`, { signal: controller.signal });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || "Could not load the gallery.");
+        setGalleryWorlds(payload.items || []);
+        setGalleryNextCursor(payload.next_cursor || null);
+        setGalleryStatus("idle");
+      } catch (caught) {
+        if (caught instanceof DOMException && caught.name === "AbortError") return;
+        setGalleryStatus("error");
+        setGalleryError(caught instanceof Error ? caught.message : "Could not load the gallery.");
+      }
+    };
+    void loadGallery();
+    return () => controller.abort();
+  }, [experience, galleryMode]);
+
+  useEffect(() => {
     const interval = window.setInterval(() => {
       if ((experience !== "play" && experience !== "watch") || !sessionStartedAtRef.current || status === "paused" || status === "expired" || status === "idle" || sessionLimitPendingRef.current) return;
       const elapsed = Math.floor((Date.now() - sessionStartedAtRef.current) / 1000);
@@ -878,6 +1002,31 @@ export default function App() {
     setStageFeedback(message);
     if (stageFeedbackTimerRef.current !== undefined) window.clearTimeout(stageFeedbackTimerRef.current);
     stageFeedbackTimerRef.current = window.setTimeout(() => setStageFeedback(""), 2_500);
+  };
+  const saveWorld = async () => {
+    if (isSavingWorld || (experience !== "play" && experience !== "watch")) return;
+    const mode = experience === "watch" ? "watch" : "play";
+    const savedPrompt = (mode === "watch" ? moviePrompt : prompt).trim();
+    if (!savedPrompt) return;
+    setIsSavingWorld(true);
+    try {
+      const image = mode === "watch"
+        ? movieImageRef.current || await defaultImageAsPng()
+        : activeImageRef.current || await defaultImageAsPng();
+      const body = new FormData();
+      body.set("mode", mode);
+      body.set("prompt", savedPrompt);
+      body.set("seed", String(seedRef.current));
+      body.set("image", image, image.name || "reference.png");
+      const response = await fetch("/api/worlds", { method: "POST", body });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || "Could not save this world.");
+      showStageFeedback("Saved permanently to public gallery");
+    } catch (caught) {
+      showStageFeedback(caught instanceof Error ? caught.message : "Could not save this world.");
+    } finally {
+      setIsSavingWorld(false);
+    }
   };
   const takeSnapshot = () => {
     if (!videoRef.current || !downloadVideoFrame(videoRef.current, experience === "watch" ? "watch" : "play")) {
@@ -974,7 +1123,51 @@ export default function App() {
                 <small>Set a cinematic direction, then let Helios roll.</small>
               </button>
             </div>
+            <button className="ghost-button gallery-link" onClick={openGallery}>Browse public gallery</button>
             <p className="microcopy">Play: 10 minute demo window · Watch: 2 minute Helios stream</p>
+          </div>
+        )}
+
+        {experience === "gallery" && (
+          <div className="entry-card gallery-card">
+            <p className="eyebrow accent">PUBLIC GALLERY</p>
+            <h2>Worlds worth revisiting.</h2>
+            <p>Saved prompts and reference images. Launching one begins a new real-time session.</p>
+            <div className="gallery-filters" aria-label="Gallery filters">
+              {(["all", "play", "watch"] as GalleryMode[]).map((mode) => (
+                <button key={mode} className={galleryMode === mode ? "is-active" : ""} onClick={() => setGalleryMode(mode)}>{mode}</button>
+              ))}
+            </div>
+            {galleryStatus === "loading" && !galleryWorlds.length && <p className="gallery-message">Loading worlds…</p>}
+            {galleryError && <p className="movie-setup-error" role="alert">{galleryError}</p>}
+            {!galleryStatus || galleryWorlds.length > 0 ? (
+              <div className="gallery-grid">
+                {galleryWorlds.map((world) => (
+                  <button className="gallery-world" key={world.id} onClick={() => openGalleryWorld(world)}>
+                    <img src={world.image_url} alt="" />
+                    <span><small>{world.mode} · {formatGalleryDate(world.created_at)}</small><strong>{promptExcerpt(world.prompt)}</strong><em>Seed {world.seed}</em></span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {galleryStatus === "idle" && !galleryWorlds.length && !galleryError && <p className="gallery-message">No saved worlds yet.</p>}
+            {galleryNextCursor && <button className="ghost-button gallery-link" onClick={() => void loadMoreGallery()} disabled={galleryStatus === "loading"}>{galleryStatus === "loading" ? "Loading…" : "Load more"}</button>}
+            <button className="ghost-button gallery-back" onClick={() => setExperience("choose")}>Back</button>
+          </div>
+        )}
+
+        {experience === "gallery-preview" && selectedGalleryWorld && (
+          <div className="entry-card movie-setup-card gallery-preview-card">
+            <p className="eyebrow accent">SAVED {selectedGalleryWorld.mode} WORLD</p>
+            <img className="gallery-preview-image" src={selectedGalleryWorld.image_url} alt="Saved world reference" />
+            <h2>{promptExcerpt(selectedGalleryWorld.prompt)}</h2>
+            <p>{selectedGalleryWorld.prompt}</p>
+            <p className="watch-budget">SEED {selectedGalleryWorld.seed} · {formatGalleryDate(selectedGalleryWorld.created_at)}</p>
+            {galleryError && <p className="movie-setup-error" role="alert">{galleryError}</p>}
+            <div className="button-row movie-setup-actions">
+              <button className="primary-button" onClick={() => void launchGalleryWorld()}>Launch {selectedGalleryWorld.mode} <span>↗</span></button>
+              <button className="ghost-button" onClick={() => { setGalleryError(""); setExperience("gallery"); }}>Back</button>
+            </div>
           </div>
         )}
 
@@ -1050,6 +1243,7 @@ export default function App() {
               <div className="button-row">
                 <button className="primary-button small" onClick={() => void (experience === "watch" ? toggleMoviePause() : togglePause())}>Resume</button>
                 <button className="ghost-button small" onClick={() => void (experience === "watch" ? restartMovie() : handleReset())}>{experience === "watch" ? "Restart movie" : "Reset world"}</button>
+                <button className="ghost-button small" onClick={() => void saveWorld()} disabled={isSavingWorld}>{isSavingWorld ? "Saving…" : "Save to gallery"}</button>
                 {experience === "watch" && <button className="ghost-button small" onClick={() => void returnToChoice()}>Back</button>}
               </div>
             </div>
@@ -1061,6 +1255,7 @@ export default function App() {
             <div className="control-hint"><span className="keycap">W</span><span className="keycap">A</span><span className="keycap">S</span><span className="keycap">D</span><span>move</span><span className="arrow-hint">← ↑ ↓ →</span><span>look</span></div>
             <div className="stage-actions">
               <button className="view-button" onClick={takeSnapshot} disabled={!hasCapturableFrame}>{hasCapturableFrame ? "Snapshot" : "Waiting for video"}</button>
+              <button className="view-button" onClick={() => void saveWorld()} disabled={isSavingWorld}>{isSavingWorld ? "Saving…" : "Save to gallery"}</button>
               <button className="view-button" onClick={() => void shareScene()}>Share scene</button>
               <button className="view-button" onClick={() => void toggleTheaterMode()}>{isTheaterMode ? "Exit theater" : "Theater mode"}</button>
               <button className="view-button" onClick={() => setPanelOpen((open) => !open)}>
@@ -1075,6 +1270,7 @@ export default function App() {
             <span className="movie-label">PASSIVE REAL-TIME MOVIE · {formatTime(watchRemainingSeconds)} · {watchEstimate} EST.</span>
             <div className="movie-controls">
               <button className="view-button" onClick={takeSnapshot} disabled={!hasCapturableFrame}>{hasCapturableFrame ? "Snapshot" : "Waiting for video"}</button>
+              <button className="view-button" onClick={() => void saveWorld()} disabled={isSavingWorld}>{isSavingWorld ? "Saving…" : "Save to gallery"}</button>
               <button className="view-button" onClick={() => void shareScene()}>Share scene</button>
               <button className="view-button" onClick={() => void toggleTheaterMode()}>{isTheaterMode ? "Exit theater" : "Theater mode"}</button>
               <button className="view-button" onClick={() => void toggleMoviePause()}>{status === "paused" ? "Resume" : "Pause"}</button>
@@ -1178,7 +1374,7 @@ export default function App() {
         </div>
         <p className="panel-footnote">{lastAction === "still" ? "The camera is at rest." : `Current movement: ${lastAction.replaceAll("+", " · ")}`}</p>
       </aside>}
-      <footer className="footer-note">A real-time world model experiment <span>·</span> No saved sessions</footer>
+      <footer className="footer-note">A real-time world model experiment <span>·</span> Public recipe gallery</footer>
     </main>
   );
 }
