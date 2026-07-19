@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.routers import reactor, voice, worlds
+from .api.routers import reactor, studio_worlds, voice, worlds
 from .core.config import get_settings
 from .services.gallery import initialize_gallery
 
@@ -28,6 +28,7 @@ app.add_middleware(
 app.include_router(reactor.router)
 app.include_router(voice.router)
 app.include_router(worlds.router)
+app.include_router(studio_worlds.router)
 
 
 @app.get("/health")

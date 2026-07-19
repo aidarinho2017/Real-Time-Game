@@ -3,7 +3,8 @@ import type { ChangeEvent, FormEvent, PointerEvent as ReactPointerEvent } from "
 import { HeliosModel } from "@reactor-models/helios";
 import { LingbotWorld2Model } from "@reactor-models/lingbot-world-2";
 import { X2Model } from "@reactor-models/x2";
-import { buildSharedSceneUrl, parseSharedScene } from "./share-scene";
+import WorldStudio from "./WorldStudio";
+import { appRouteFromPath, buildSharedSceneUrl, pathForAppRoute, parseSharedScene, type AppRoute, type SharedScene } from "./share-scene";
 import { parseVoiceCommand } from "./voice-command";
 import {
   DEFAULT_PROMPT,
@@ -36,7 +37,7 @@ const WATCH_SECONDS = Number.isFinite(configuredWatchSeconds) && configuredWatch
   ? configuredWatchSeconds
   : DEFAULT_WATCH_SECONDS;
 
-type Experience = "choose" | "gallery" | "gallery-preview" | "play" | "watch-setup" | "watch" | "edit-setup" | "edit";
+type Experience = "landing" | "studio" | "choose" | "gallery" | "gallery-preview" | "play" | "watch-setup" | "watch" | "edit-setup" | "edit";
 type PromptPreset = (typeof PROMPT_PRESETS)[number];
 type InitialWorld = Pick<PromptPreset, "playPrompt" | "image" | "name">;
 type LaunchWorld = { prompt: string; image: File; name: string; seed: number };
@@ -233,6 +234,14 @@ function promptExcerpt(prompt: string): string {
   return prompt.replace(/\s+/g, " ").trim().slice(0, 90);
 }
 
+function experienceForRoute(route: AppRoute, sharedScene: SharedScene | null): Experience {
+  if (route === "studio") return "studio";
+  if (route === "choose") return "choose";
+  if (sharedScene?.mode === "watch") return "watch-setup";
+  if (sharedScene?.mode === "edit") return "edit-setup";
+  return "landing";
+}
+
 function imageValidationError(image: File): string | null {
   if (!image.type.startsWith("image/")) return "Choose an image file.";
   if (image.size > MAX_IMAGE_BYTES) return "Images must be 10 MB or smaller.";
@@ -241,10 +250,11 @@ function imageValidationError(image: File): string | null {
 
 export default function App() {
   const sharedScene = parseSharedScene(window.location.search);
+  const initialRoute = appRouteFromPath(window.location.pathname);
   const initialPlayPrompt = sharedScene?.mode === "play" ? sharedScene.prompt : DEFAULT_PROMPT;
   const initialMoviePrompt = sharedScene?.mode === "watch" ? sharedScene.prompt : DEFAULT_PROMPT;
   const initialEditPrompt = sharedScene?.mode === "edit" ? sharedScene.prompt : "Make the video look like a hand-painted animated film.";
-  const sharedPlayLaunchRef = useRef(sharedScene?.mode === "play");
+  const sharedPlayLaunchRef = useRef(sharedScene?.mode === "play" && initialRoute === "landing");
   const appShellRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const sourceVideoRef = useRef<HTMLVideoElement>(null);
@@ -272,7 +282,7 @@ export default function App() {
   const lastPointerSentAtRef = useRef(0);
 
   const [status, setStatus] = useState<SessionStatus>("idle");
-  const [experience, setExperience] = useState<Experience>(sharedScene?.mode === "watch" ? "watch-setup" : sharedScene?.mode === "edit" ? "edit-setup" : "choose");
+  const [experience, setExperience] = useState<Experience>(() => experienceForRoute(initialRoute, sharedScene));
   const [prompt, setPrompt] = useState(initialPlayPrompt);
   const [draftPrompt, setDraftPrompt] = useState(initialPlayPrompt);
   const [moviePrompt, setMoviePrompt] = useState(initialMoviePrompt);
@@ -313,6 +323,22 @@ export default function App() {
   const setModelStatus = useCallback((nextStatus: SessionStatus) => {
     setStatus(nextStatus);
     if (nextStatus !== "error") setError("");
+  }, []);
+
+  const navigate = useCallback((route: AppRoute) => {
+    const path = pathForAppRoute(route);
+    if (window.location.pathname !== path || window.location.search || window.location.hash) {
+      window.history.pushState(null, "", path);
+    }
+    setExperience(experienceForRoute(route, null));
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => {
+      setExperience(experienceForRoute(appRouteFromPath(window.location.pathname), parseSharedScene(window.location.search)));
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
   const handleModelError = useCallback((message: LingbotError) => {
@@ -979,7 +1005,7 @@ export default function App() {
     sessionExpiredRef.current = false;
     setIsActionPending(false);
     setPanelOpen(false);
-    setExperience("choose");
+    navigate("landing");
     setStatus("idle");
     setError("");
     setFrozenFrame(null);
@@ -991,7 +1017,7 @@ export default function App() {
       videoRef.current.pause();
       videoRef.current.srcObject = null;
     }
-  }, [experience, status, stopEditSource]);
+  }, [experience, navigate, status, stopEditSource]);
 
   const choosePlay = useCallback(() => {
     setExperience("play");
@@ -1039,13 +1065,13 @@ export default function App() {
 
   const cancelMovieSetup = useCallback(() => {
     setMovieSetupError("");
-    setExperience("choose");
-  }, []);
+    navigate("landing");
+  }, [navigate]);
 
   const cancelEditSetup = useCallback(() => {
     setEditSetupError("");
-    setExperience("choose");
-  }, []);
+    navigate("landing");
+  }, [navigate]);
 
   const openGallery = useCallback(() => {
     setSelectedGalleryWorld(null);
@@ -1409,6 +1435,123 @@ export default function App() {
     });
   }, []);
 
+  const renderStudioWorld = useCallback(async (name: string, studioPrompt: string) => {
+    try {
+      const image = await defaultImageAsPng();
+      basePromptRef.current = studioPrompt;
+      setPrompt(studioPrompt);
+      setDraftPrompt(studioPrompt);
+      setSelectedImage(null);
+      setActiveImageName(name);
+      setExperience("play");
+      setPanelOpen(true);
+      setRemainingSeconds(SESSION_SECONDS);
+      sessionStartedAtRef.current = null;
+      void startSession({ name, prompt: studioPrompt, image, seed: 42 });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not prepare the structured world for rendering.");
+      navigate("landing");
+    }
+  }, [navigate, startSession]);
+
+  if (experience === "studio") {
+    return <WorldStudio onClose={() => navigate("landing")} onRender={renderStudioWorld} />;
+  }
+
+  if (experience === "landing") {
+    return (
+      <main ref={appShellRef} className="landing-page">
+        <header className="landing-header">
+          <a className="landing-brand" href="#top" aria-label="Living Worlds home">
+            <span className="landing-brand-mark" aria-hidden="true" />
+            <span>LIVING WORLDS</span>
+          </a>
+          <nav className="landing-nav" aria-label="Page sections">
+            <button type="button" onClick={() => navigate("studio")}>World Studio</button>
+            <a href="#capabilities">Capabilities</a>
+            <a href="#builders">For builders</a>
+            <a href="#use-cases">Use cases</a>
+          </nav>
+          <button className="landing-header-cta" type="button" onClick={() => navigate("choose")}>Get started <span>↗</span></button>
+        </header>
+
+        <section id="top" className="landing-hero">
+          <div className="landing-hero-copy">
+            <p className="landing-kicker">REAL-TIME AI VIDEO, MADE INTERACTIVE</p>
+            <h1>Edit reality <em>with AI.</em></h1>
+            <p className="landing-lede">Build experiences where video becomes editable, playable, and responsive to the people inside it.</p>
+            <p className="landing-body">Living Worlds brings Reactor world, movie, and editing models into one browser-native demo—so the first frame is only the beginning.</p>
+            <button className="landing-primary-cta" type="button" onClick={() => navigate("choose")}>Get started <span>→</span></button>
+            <button className="landing-primary-cta landing-studio-cta" type="button" onClick={() => navigate("studio")}>Open World Studio <span>→</span></button>
+            <p className="landing-trust">BUILT WITH REACTOR WORLD, MOVIE, AND EDIT MODELS</p>
+          </div>
+
+          <div className="landing-demo" aria-label="Living Worlds product preview">
+            <figure className="landing-preview-frame">
+              <img src={DEFAULT_WORLD_IMAGE} alt="A cinematic forest world ready to explore" />
+              <span className="landing-preview-live"><i /> LIVE WORLD</span>
+              <span className="landing-preview-target" aria-hidden="true" />
+              <figcaption><span>▶</span><b /> 00:04 / LIVE</figcaption>
+            </figure>
+            <div className="landing-code-panel">
+              <p>POST /v1/worlds/start</p>
+              <pre>{'{\n  "mode": "play",\n  "prompt": "A world that reacts",\n  "model": "lingbot-world-2"\n}'}</pre>
+              <footer><span>200&nbsp; OK</span><span>REAL-TIME</span></footer>
+            </div>
+          </div>
+        </section>
+
+        <section id="capabilities" className="landing-section landing-capabilities">
+          <div className="landing-section-intro">
+            <p className="landing-kicker">ONE MEDIUM. FOUR WAYS TO WORK.</p>
+            <h2>Everything you need to make video <em>do more.</em></h2>
+          </div>
+          <div className="landing-capability-grid">
+            <button className="landing-capability" type="button" onClick={choosePlay}><span>✦</span><h3>Generate</h3><p>Enter a new world from a prompt, image, or featured starting point.</p><small>START A WORLD ↗</small></button>
+            <button className="landing-capability" type="button" onClick={chooseEdit}><span>⌁</span><h3>Edit</h3><p>Transform a webcam, video clip, or still image live with X2.</p><small>OPEN THE EDITOR ↗</small></button>
+            <button className="landing-capability" type="button" onClick={choosePlay}><span>▷</span><h3>Play</h3><p>Move through a living scene, change its direction, and influence what happens next.</p><small>EXPLORE A WORLD ↗</small></button>
+            <button className="landing-capability" type="button" onClick={chooseWatch}><span>◉</span><h3>Watch</h3><p>Direct a real-time movie and hold onto its most memorable frame.</p><small>START A MOVIE ↗</small></button>
+          </div>
+        </section>
+
+        <section id="builders" className="landing-section landing-builder-strip">
+          <p className="landing-kicker">BUILT FOR DEVELOPERS</p>
+          <div className="landing-builder-grid">
+            <article><span>⌘</span><h3>Simple API</h3><p>Clear model sessions and direct controls for the experience you are making.</p></article>
+            <article><span>ϟ</span><h3>Fast integration</h3><p>Go from a starting image to a live generated frame in minutes.</p></article>
+            <article><span>◇</span><h3>Production-minded</h3><p>Short-lived browser tokens keep provider keys on the server.</p></article>
+            <article><span>□</span><h3>Flexible</h3><p>Use a single mode or combine worlds, movies, and edits into your own flow.</p></article>
+          </div>
+        </section>
+
+        <section id="use-cases" className="landing-section landing-use-cases">
+          <div>
+            <p className="landing-kicker">WHAT CAN YOU BUILD?</p>
+            <h2>Interfaces for a more <em>playable medium.</em></h2>
+          </div>
+          <ul>
+            <li>AI video editors</li><li>Interactive storytelling</li><li>Creative tools</li><li>World model experiments</li><li>AI games</li><li>Marketing generators</li><li>Virtual production workflows</li><li>Research prototypes</li>
+          </ul>
+        </section>
+
+        <section className="landing-section landing-closing">
+          <div>
+            <p className="landing-kicker">WHY LIVING WORLDS?</p>
+            <h2>Traditional video is static.<br />Living Worlds turns it into something <em>programmable.</em></h2>
+            <button className="landing-primary-cta" type="button" onClick={() => navigate("choose")}>Try the live demo <span>→</span></button>
+          </div>
+          <div className="landing-closing-list">
+            <p><span>✓</span> Generate it.</p><p><span>✓</span> Edit it.</p><p><span>✓</span> Play it.</p><p><span>✓</span> Build on top of it.</p>
+            <hr />
+            <p className="landing-muted">Designed for experimentation. Prototype new interfaces, ship AI-powered products, and push interactive media further.</p>
+          </div>
+        </section>
+
+        <footer className="landing-footer"><span>LIVING WORLDS</span><span>REAL-TIME AI VIDEO DEMO</span></footer>
+      </main>
+    );
+  }
+
   return (
     <main ref={appShellRef} className={`app-shell ${isTheaterMode ? "is-theater" : ""}`}>
       <div className="ambient ambient-one" />
@@ -1514,7 +1657,7 @@ export default function App() {
             ) : null}
             {galleryStatus === "idle" && !galleryWorlds.length && !galleryError && <p className="gallery-message">No saved worlds yet.</p>}
             {galleryNextCursor && <button className="ghost-button gallery-link" onClick={() => void loadMoreGallery()} disabled={galleryStatus === "loading"}>{galleryStatus === "loading" ? "Loading…" : "Load more"}</button>}
-            <button className="ghost-button gallery-back" onClick={() => setExperience("choose")}>Back</button>
+            <button className="ghost-button gallery-back" onClick={() => navigate("landing")}>Back</button>
           </div>
         )}
 
