@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -10,8 +10,8 @@ from psycopg.types.json import Jsonb
 
 from ..core.database import connect
 
-STUDIO_WORLD_COLUMNS = "id, name, description, initial_prompt, initial_state, state, current_revision, created_at, updated_at"
-EVENT_COLUMNS = "revision, command, summary, created_at"
+STUDIO_WORLD_COLUMNS = "id, name, description, initial_prompt, initial_state, state, current_revision, last_render_key, last_render_content_type, last_rendered_at, created_at, updated_at"
+EVENT_COLUMNS = "revision, command, summary, before_state, after_state, created_at"
 
 
 class StudioWorldMissingError(LookupError):
@@ -31,6 +31,9 @@ class StudioWorld:
     initial_state: dict[str, Any]
     state: dict[str, Any]
     current_revision: int
+    last_render_key: str | None
+    last_render_content_type: str | None
+    last_rendered_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -41,6 +44,8 @@ class StudioWorldEvent:
     command: str
     summary: str
     created_at: datetime
+    before_state: dict[str, Any] = field(default_factory=dict)
+    after_state: dict[str, Any] = field(default_factory=dict)
 
 
 def world_from_row(row: dict[str, Any]) -> StudioWorld:
@@ -116,6 +121,21 @@ def add_change(
                     SET state = %s, current_revision = %s, updated_at = NOW()
                     WHERE id = %s RETURNING {STUDIO_WORLD_COLUMNS}""",
                 (Jsonb(after_state), next_revision, world_id),
+            )
+            row = cursor.fetchone()
+    if row is None:
+        raise StudioWorldMissingError()
+    return world_from_row(row)
+
+
+def set_last_render(world_id: UUID, image_key: str, content_type: str) -> StudioWorld:
+    with connect() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"""UPDATE studio_worlds
+                    SET last_render_key = %s, last_render_content_type = %s, last_rendered_at = NOW(), updated_at = NOW()
+                    WHERE id = %s RETURNING {STUDIO_WORLD_COLUMNS}""",
+                (image_key, content_type, world_id),
             )
             row = cursor.fetchone()
     if row is None:

@@ -40,7 +40,7 @@ const WATCH_SECONDS = Number.isFinite(configuredWatchSeconds) && configuredWatch
 type Experience = "landing" | "studio" | "choose" | "gallery" | "gallery-preview" | "play" | "watch-setup" | "watch" | "edit-setup" | "edit";
 type PromptPreset = (typeof PROMPT_PRESETS)[number];
 type InitialWorld = Pick<PromptPreset, "playPrompt" | "image" | "name">;
-type LaunchWorld = { prompt: string; image: File; name: string; seed: number };
+type LaunchWorld = { prompt: string; image: File; name: string; seed: number; studioWorldId?: string };
 type EditSourceType = "webcam" | "video" | "image";
 type GalleryMode = "all" | "play" | "watch" | "edit";
 
@@ -280,6 +280,8 @@ export default function App() {
   const editSourceUrlRef = useRef<string | null>(null);
   const editCanvasTimerRef = useRef<number | undefined>(undefined);
   const lastPointerSentAtRef = useRef(0);
+  const studioRenderWorldIdRef = useRef<string | null>(null);
+  const studioFrameSavedRef = useRef(false);
 
   const [status, setStatus] = useState<SessionStatus>("idle");
   const [experience, setExperience] = useState<Experience>(() => experienceForRoute(initialRoute, sharedScene));
@@ -541,6 +543,8 @@ export default function App() {
 
   const startSession = useCallback(async (initialWorld?: InitialWorld | LaunchWorld) => {
     try {
+      studioRenderWorldIdRef.current = initialWorld && "studioWorldId" in initialWorld ? initialWorld.studioWorldId || null : null;
+      studioFrameSavedRef.current = false;
       setModelStatus("connecting");
       const jwt = await getToken();
       const model = normalizeModel(new LingbotWorld2Model());
@@ -1435,7 +1439,28 @@ export default function App() {
     });
   }, []);
 
-  const renderStudioWorld = useCallback(async (name: string, studioPrompt: string) => {
+  const saveStudioFrame = useCallback(async (video: HTMLVideoElement) => {
+    const worldId = studioRenderWorldIdRef.current;
+    if (!worldId || studioFrameSavedRef.current) return;
+    const frame = await captureVideoFrameFile(video, "studio-render.jpg");
+    if (!frame) return;
+    studioFrameSavedRef.current = true;
+    try {
+      const body = new FormData();
+      body.set("image", frame, frame.name);
+      const response = await fetch(`/api/studio-worlds/${worldId}/last-render`, { method: "POST", body });
+      if (!response.ok) studioFrameSavedRef.current = false;
+    } catch {
+      studioFrameSavedRef.current = false;
+    }
+  }, []);
+
+  const handleMainVideoLoaded = useCallback((video: HTMLVideoElement) => {
+    setHasCapturableFrame(Boolean(video.videoWidth && video.videoHeight));
+    void saveStudioFrame(video);
+  }, [saveStudioFrame]);
+
+  const renderStudioWorld = useCallback(async (worldId: string, name: string, studioPrompt: string) => {
     try {
       const image = await defaultImageAsPng();
       basePromptRef.current = studioPrompt;
@@ -1447,7 +1472,7 @@ export default function App() {
       setPanelOpen(true);
       setRemainingSeconds(SESSION_SECONDS);
       sessionStartedAtRef.current = null;
-      void startSession({ name, prompt: studioPrompt, image, seed: 42 });
+      void startSession({ name, prompt: studioPrompt, image, seed: 42, studioWorldId: worldId });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not prepare the structured world for rendering.");
       navigate("landing");
@@ -1580,7 +1605,7 @@ export default function App() {
           autoPlay
           playsInline
           muted
-          onLoadedData={(event) => setHasCapturableFrame(Boolean(event.currentTarget.videoWidth && event.currentTarget.videoHeight))}
+          onLoadedData={(event) => handleMainVideoLoaded(event.currentTarget)}
         />
         <video ref={sourceVideoRef} className="source-video" muted playsInline />
         {frozenFrame && <img className="frozen-frame" src={frozenFrame} alt="The last frame of the world" />}

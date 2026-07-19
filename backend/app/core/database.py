@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS studio_worlds (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE studio_worlds ADD COLUMN IF NOT EXISTS last_render_key TEXT;
+ALTER TABLE studio_worlds ADD COLUMN IF NOT EXISTS last_render_content_type TEXT;
+ALTER TABLE studio_worlds ADD COLUMN IF NOT EXISTS last_rendered_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS studio_world_events (
     id UUID PRIMARY KEY,
     world_id UUID NOT NULL REFERENCES studio_worlds(id) ON DELETE CASCADE,

@@ -7,8 +7,11 @@ from typing import Any
 from uuid import UUID
 
 import psycopg
+from botocore.exceptions import BotoCoreError, ClientError
 
+from ..core.storage import put_image, read_image
 from ..repositories import studio_worlds
+from .gallery import GalleryValidationError, validate_image
 
 ENVIRONMENT_FIELDS = ("weather", "time", "lighting", "temperature", "season")
 COLORS = "red|blue|green|yellow|black|white|silver|gold|purple|pink|orange|brown|gray|grey"
@@ -274,6 +277,12 @@ def answer_query(state: dict[str, Any], events: list[studio_worlds.StudioWorldEv
     return f"This world has {len(state['characters'])} characters, {len(state['objects'])} objects, and {len(state['locations'])} locations. Ask where someone is, who owns an object, or what changed recently."
 
 
+def affected_characters(event: studio_worlds.StudioWorldEvent) -> list[str]:
+    before = normalize_state(event.before_state)["characters"]
+    after = normalize_state(event.after_state)["characters"]
+    return sorted(name for name in set(before) | set(after) if before.get(name) != after.get(name))
+
+
 def render_prompt(state: dict[str, Any], initial_prompt: str, shot: str, character: str | None = None) -> str:
     state = normalize_state(state)
     if shot == "character":
@@ -332,6 +341,27 @@ def get_world_or_raise(world_id: UUID) -> studio_worlds.StudioWorld:
     if world is None:
         raise WorldStudioValidationError("This world does not exist.")
     return world
+
+
+def save_last_rendered_frame(world_id: UUID, image_data: bytes) -> studio_worlds.StudioWorld:
+    world = get_world_or_raise(world_id)
+    image = validate_image(image_data)
+    key = f"studio-worlds/{world.id}/last-render.{image.extension}"
+    try:
+        put_image(key, image_data, image.content_type)
+        return studio_worlds.set_last_render(world.id, key, image.content_type)
+    except (BotoCoreError, ClientError, psycopg.Error) as exc:
+        raise WorldStudioError("Could not save the rendered frame.") from exc
+
+
+def get_last_rendered_frame(world_id: UUID) -> tuple[studio_worlds.StudioWorld, bytes] | None:
+    world = get_world_or_raise(world_id)
+    if not world.last_render_key:
+        return None
+    try:
+        return world, read_image(world.last_render_key)
+    except (BotoCoreError, ClientError) as exc:
+        raise WorldStudioError("Could not load the rendered frame.") from exc
 
 
 def list_worlds(limit: int) -> list[studio_worlds.StudioWorld]:

@@ -61,6 +61,7 @@ class StudioWorldEventResponse(BaseModel):
     command: str
     summary: str
     created_at: datetime
+    affected_characters: list[str] = []
 
 
 class StudioWorldResponse(BaseModel):
@@ -70,6 +71,8 @@ class StudioWorldResponse(BaseModel):
     initial_prompt: str
     state: dict[str, Any]
     current_revision: int
+    last_render_url: str | None = None
+    last_rendered_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     events: list[StudioWorldEventResponse] = []

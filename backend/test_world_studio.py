@@ -39,6 +39,13 @@ class WorldStudioTest(unittest.TestCase):
         self.assertNotIn("..", prompt)
         self.assertIn("POV shot from Alice", world_studio.render_prompt(state, "A cyberpunk city", "character", "alice"))
 
+    def test_character_history_uses_event_state_changes(self) -> None:
+        before = world_studio.initial_state("A city")
+        after = world_studio.apply_command(before, "Add Alice").state
+        event = StudioWorldEvent(1, "Add Alice", "Alice was added to the world.", datetime.now(UTC), before, after)
+
+        self.assertEqual(world_studio.affected_characters(event), ["Alice"])
+
 
 if __name__ == "__main__":
     unittest.main()
